@@ -52,12 +52,12 @@ class CameraModel(qtc.QThread):
             self.cam = xiapi.Camera()
         self.status.emit("Communication ...")
         self.cam.open_device_by_SN("UBFAS2438006")
+        self.cam.enable_auto_wb()
         self.status.emit("Device Opened")
         self.cam.set_debug_level("XI_DL_FATAL")
         self.cam.get_proc_num_threads_maximum()
-        self.cam.enable_auto_wb()
-        self.cam.set_gain(Const.GAIN)
-        self.cam.set_exposure(Const.EXPOSURE)
+        self.cam.set_gain(self.gain)
+        self.cam.set_exposure(self.exposure)
         # self.cam.set_buffer_policy("XI_BP_UNSAFE")
         self.cam.set_imgdataformat("XI_RGB32")
         # self.cam.set_transport_data_target("XI_TRANSPORT_DATA_TARGET_UNIFIED")
@@ -104,7 +104,6 @@ class CameraModel(qtc.QThread):
     def run(self):
         try:
             self.thread = True
-            self.n = 0
             self.__config_camera()
             while self.thread:
                 self.mutex.lock()
@@ -125,7 +124,7 @@ class CameraModel(qtc.QThread):
                     pic = convert.scaled(self.size, Const.KEEP_ASPECT_RATION_BY_EXPANDING, Const.FAST_TRANSFORMATION)
                     self.update.emit(pic)
                     self.status.emit("Camera Streaming ...")
-                    time.sleep(self.exposure/Const.WAIT_EXPOSURE)
+                    time.sleep(self.exposure / Const.WAIT_EXPOSURE)
                 else:
                     break
                 self.mutex.unlock()
