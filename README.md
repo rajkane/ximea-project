@@ -12,5 +12,6 @@
 
 ## What APIs and frameworks will I use:
 - ximea API
+- PyQt6
 - opencv
 - torch
