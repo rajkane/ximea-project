@@ -1,10 +1,11 @@
 import gc
-
+import os
 from src.model.constants import Const
 from fractions import Fraction
 from src.external import qtw, qtc, qtg
 from src.view.mainwindow import Ui_MainWindow
 from src.model.camera_model import CameraModel
+from src.controller.snapshot_controller import SnapshotDialog
 from src.model.constants import Exposure
 
 
@@ -13,6 +14,9 @@ class MainWindow(qtw.QMainWindow, Ui_MainWindow):
         super(MainWindow, self).__init__()
         self.setupUi(self)
         self.cam_process = None
+        self.snapshots_window = None
+        pixmap = qtg.QPixmap(os.path.join("./assets/video-camera-alt.png"))
+        self.lbl_camera_stream.setPixmap(pixmap)
         self.scale = 1
         self.__config_buttons()
         self.__config_dial_gain()
@@ -32,6 +36,7 @@ class MainWindow(qtw.QMainWindow, Ui_MainWindow):
         self.btn_start.clicked.connect(self.__start_camera)
         self.btn_stop.setEnabled(False)
         self.btn_stop.clicked.connect(self.__stop_camera)
+        self.btn_fill_dataset.clicked.connect(self.__open_snapshots_window)
 
     def __config_dial_gain(self):
         self.dial_gain.setEnabled(False)
@@ -55,12 +60,19 @@ class MainWindow(qtw.QMainWindow, Ui_MainWindow):
             self.__change_exposure_camera(self.dial_exposure.value())
 
     def __stop_camera(self):
-        if self.cam_process.isRunning():
-            self.cam_process.stop()
+        if isinstance(self.cam_process, CameraModel):
+            if self.cam_process.isRunning():
+                self.cam_process.stop()
 
-            del self.cam_process
-            gc.collect()
-            self.cam_process = None
+                del self.cam_process
+                gc.collect()
+                self.cam_process = None
+
+    def __open_snapshots_window(self):
+        if not isinstance(self.snapshots_window, SnapshotDialog):
+            self.snapshots_window = SnapshotDialog()
+        self.snapshots_window.show()
+        self.__stop_camera()
 
     def __change_gain_camera(self, gain: int):
         self.lbl_gain_value.setText(f"{gain}dB")
@@ -74,7 +86,7 @@ class MainWindow(qtw.QMainWindow, Ui_MainWindow):
             self.lbl_exposure_value.setText(f"{ratio}s")
         else:
             self.lbl_exposure_value.setText(f"{value}s")
-        self.cam_process.set_exposure(int(value * Const.WAIT_EXPOSURE))
+        self.cam_process.set_exposure_camera(int(value * Const.WAIT_EXPOSURE))
 
     @qtc.pyqtSlot(bool)
     def __check_conn_camera(self, check):
@@ -95,12 +107,6 @@ class MainWindow(qtw.QMainWindow, Ui_MainWindow):
 
     @qtc.pyqtSlot(str)
     def __get_status(self, status):
-        self.statusBar().setStyleSheet(
-            """
-                background-color: rgb(0, 0, 0);
-                color: white;
-            """
-        )
         self.statusBar().showMessage(status)
 
     @qtc.pyqtSlot(str)
@@ -114,14 +120,15 @@ class MainWindow(qtw.QMainWindow, Ui_MainWindow):
         self.statusBar().showMessage(status)
 
     def wheelEvent(self, e):
-        if self.cam_process.isRunning():
-            if e.angleDelta().y() > 0 and self.scale <= 1.5:
-                self.scale += Const.STEP
-            elif e.angleDelta().y() < 0 and self.scale >= 1:
-                self.scale -= Const.STEP
+        if isinstance(self.cam_process, CameraModel):
+            if self.cam_process.isRunning():
+                if e.angleDelta().y() > 0 and self.scale <= 1.5:
+                    self.scale += Const.STEP
+                elif e.angleDelta().y() < 0 and self.scale >= 1:
+                    self.scale -= Const.STEP
 
-            if 1 <= self.scale <= 1.5 and qtc.Qt.WindowState.WindowMaximized == self.windowState():
-                self.cam_process.set_scale_camera(self.scale)
+                if 1 <= self.scale <= 1.5 and qtc.Qt.WindowState.WindowMaximized == self.windowState():
+                    self.cam_process.set_scale_camera(self.scale)
 
     def mouseDoubleClickEvent(self, e):
         self.showNormal()
@@ -142,6 +149,8 @@ class MainWindow(qtw.QMainWindow, Ui_MainWindow):
             "Are you sure to quit?",
         )
         if msg == qtw.QMessageBox.StandardButton.Yes:
+            if isinstance(self.snapshots_window, SnapshotDialog):
+                self.snapshots_window.close()
             if isinstance(self.cam_process, CameraModel):
                 if self.cam_process.isRunning():
                     self.cam_process.stop()

@@ -42,3 +42,4 @@ class Const:
     EXPOSURE = 250
     WAIT_EXPOSURE = 1000000
     STEP = .05
+    N = 0

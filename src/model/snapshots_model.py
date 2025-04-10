@@ -1,35 +1,46 @@
-import gc
-import time
-from src.model.constants import Const
+import datetime
+import os
+
 from src.external import qtc, qtg
+from src.model.constants import Const
 from ximea import xiapi
-from sfps import SFPS
+import time
 import cv2
-import torch
 
-
-class CameraModel(qtc.QThread):
-    update = qtc.pyqtSignal(qtg.QImage, name="camera-signal")
-    status = qtc.pyqtSignal(str, name="status-signal")
-    exception = qtc.pyqtSignal(str, name="exception-signal")
-    check_conn = qtc.pyqtSignal(bool, name="check-conn-signal")
+class SnapshotsModel(qtc.QThread):
+    update = qtc.pyqtSignal(qtg.QImage)
+    status = qtc.pyqtSignal(str)
+    progress = qtc.pyqtSignal(int)
+    exception = qtc.pyqtSignal(str)
+    check_conn = qtc.pyqtSignal(bool)
 
     def __init__(self):
-        super(CameraModel, self).__init__()
+        super(SnapshotsModel, self).__init__()
         self.mutex = None
         self.thread = False
         self.cam = None
         self.img = None
+        self.size = Const.SIZE
+        self.path = None
         self.gain = None
         self.exposure = None
-        self.size = Const.SIZE
-        self.sfps = None
+        self.number = None
+        self.interval = None
+
+    def set_scale_camera(self, scale: float):
+        self.size = qtc.QSize(int(Const.WIDTH * scale), int(Const.HEIGHT * scale))
+
+    def set_path(self, path):
+        self.path = path
+
+    def get_path(self):
+        return self.path
 
     def set_gain_camera(self, gain: float):
         self.gain = gain
 
     def get_gain_camera(self):
-        return self.gain
+        return self.gain()
 
     def set_exposure_camera(self, exposure: int):
         self.exposure = exposure
@@ -37,22 +48,21 @@ class CameraModel(qtc.QThread):
     def get_exposure_camera(self):
         return self.exposure
 
-    def set_scale_camera(self, scale: float):
-        self.size = qtc.QSize(int(Const.WIDTH * scale), int(Const.HEIGHT * scale))
+    def set_number(self, number: int):
+        self.number = number
+
+    def set_interval_camera(self, interval: int):
+        self.interval = interval
+
+    def get_interval_camera(self):
+        time.sleep(self.interval)
 
     def __config_camera(self):
-        # Ensure GPU is available
-        print(f"CUDA: {torch.zeros(1).cuda()}")
-
         if not isinstance(self.mutex, qtc.QMutex):
             self.mutex = qtc.QMutex()
-        if not isinstance(self.sfps, SFPS):
-            self.sfps = SFPS(nframes=5, interval=1)
         if not isinstance(self.cam, xiapi.Camera):
             self.cam = xiapi.Camera()
-        self.status.emit("Communication ...")
         self.cam.open_device_by_SN("UBFAS2438006")
-        self.status.emit("Device Opened")
         self.cam.set_debug_level("XI_DL_FATAL")
         self.cam.get_proc_num_threads_maximum()
         self.cam.enable_auto_wb()
@@ -63,58 +73,35 @@ class CameraModel(qtc.QThread):
         # self.cam.set_transport_data_target("XI_TRANSPORT_DATA_TARGET_UNIFIED")
         self.cam.set_acq_buffer_size(512000000)
         self.cam.enable_auto_bandwidth_calculation()
-        self.status.emit("Creating Instance of Image to Store Image Data and Metadata ...")
         if not isinstance(self.img, xiapi.Image):
             self.img = xiapi.Image()
-        self.status.emit("Created Instance")
-        self.status.emit('Starting Data Acquisition...')
         self.cam.start_acquisition()
-        self.status.emit('Started Data Acquisition')
-
-    def show_fps(self, img):
-        fps = self.sfps.fps(format_spec='.1f')
-        cv2.rectangle(img, Const.START_POINT_BG_FPS, Const.END_POINT_BG_FPS, Const.RECT_COLOR_BG, Const.THICKNEES_RECTANGLE)
-        cv2.putText(
-            img,
-            text=f"FPS: {fps}",
-            org=Const.ORG_TEXT_FPS,
-            fontFace=cv2.FONT_HERSHEY_SIMPLEX,
-            fontScale=Const.FONT_SCALE_FPS,
-            color=Const.RECT_COLOR_TEXT_FPS,
-            thickness=Const.THICKNEES,
-            lineType=cv2.LINE_AA
-        )
-
 
     def __close_cam(self):
-        self.mutex.lock()
-        self.status.emit("Stopping Acquisition ...")
         self.cam.set_counter_selector("XI_CNT_SEL_TRANSPORT_SKIPPED_FRAMES")
         self.cam.get_counter_value()
         self.cam.set_counter_selector("XI_CNT_SEL_API_SKIPPED_FRAMES")
         self.cam.get_counter_value()
         self.cam.stop_acquisition()
-        self.status.emit("Stopped Acquisition")
-        self.status.emit("Closing Camera ...")
         self.cam.close_device()
-        self.status.emit("Camera Closed")
         self.check_conn.emit(False)
-        self.mutex.unlock()
 
     def run(self):
         try:
             self.thread = True
-            self.n = 0
             self.__config_camera()
-            while self.thread:
+            for i in range(1, self.number+1):
                 self.mutex.lock()
+                if i > self.number:
+                    break
                 if self.cam.is_isexist():
                     self.check_conn.emit(True)
                     self.cam.set_gain(self.gain)
                     self.cam.set_exposure(self.exposure)
+                    self.get_interval_camera()
                     self.cam.get_image(self.img)
                     img = self.img.get_image_data_numpy(False)
-                    self.show_fps(img)
+
                     convert = qtg.QImage(
                         img.data,
                         img.shape[1],
@@ -124,24 +111,18 @@ class CameraModel(qtc.QThread):
 
                     pic = convert.scaled(self.size, Const.KEEP_ASPECT_RATION_BY_EXPANDING, Const.FAST_TRANSFORMATION)
                     self.update.emit(pic)
-                    self.status.emit("Camera Streaming ...")
-                    time.sleep(self.exposure/Const.WAIT_EXPOSURE)
-                else:
-                    break
+                    cv2.imwrite(os.path.join(f"{self.path}/{datetime.datetime.now()}.jpeg"), img)
+                    self.status.emit(f"Image: {i}")
+                    self.progress.emit(i)
                 self.mutex.unlock()
 
+            self.status.emit("Done")
             self.__close_cam()
+            self.stop()
 
         except xiapi.Xi_error as e:
-            self.exception.emit(str(e))
-
-        finally:
             self.stop()
-            del self.sfps
-            del self.cam
-            del self.img
-            gc.collect()
-            self.sfps, self.cam, self.img = None, None, None
+            self.exception.emit(str(e))
 
     def stop(self):
         if self.isRunning():
