@@ -69,11 +69,11 @@ class MainWindow(qtw.QMainWindow, Ui_MainWindow):
                 self.cam_process = None
 
     def __open_snapshots_window(self):
+        self.__stop_camera()
         if not isinstance(self.snapshots_window, SnapshotDialog):
             self.snapshots_window = SnapshotDialog()
         self.snapshots_window.setModal(True)
         self.snapshots_window.show()
-        self.__stop_camera()
 
     def __change_gain_camera(self, gain: int):
         self.lbl_gain_value.setText(f"{gain}dB")

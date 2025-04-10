@@ -1,5 +1,5 @@
+import gc
 from src.external import qtw, qtc, qtg
-from src.model.constants import Const
 from src.model.snapshots_model import SnapshotsModel
 from src.view.snapshots_dialog import Ui_dialog_snapshots
 from pathlib import Path
@@ -95,7 +95,7 @@ class SnapshotDialog(qtw.QDialog, Ui_dialog_snapshots):
 
     def accept(self):
         self.progressBar.setValue(0)
-        if self.ds_name != "" and self.path != "":
+        if self.ds_name is not None and self.path is not None:
             dataset = os.path.join(f"{self.path}/{self.ds_name}")
             if not os.path.exists(dataset):
                 os.makedirs(dataset)
@@ -117,6 +117,16 @@ class SnapshotDialog(qtw.QDialog, Ui_dialog_snapshots):
             self.snapshot_model.progress.connect(self.__progress)
             self.snapshot_model.start()
 
+    def reject(self):
+        if isinstance(self.snapshot_model, SnapshotsModel):
+            if self.snapshot_model.isRunning():
+                self.snapshot_model.stop()
+
+                del self.snapshot_model
+                gc.collect()
+                self.snapshot_model = None
+
+
     @qtc.pyqtSlot(qtg.QImage)
     def __update_image(self, img):
         self.lbl_snapshot.setPixmap(qtg.QPixmap.fromImage(img))
@@ -128,4 +138,17 @@ class SnapshotDialog(qtw.QDialog, Ui_dialog_snapshots):
     @qtc.pyqtSlot(int)
     def __progress(self, val):
         self.progressBar.setValue(val)
+
+
+    def closeEvent(self, e):
+        if isinstance(self.snapshot_model, SnapshotDialog):
+            if self.snapshot_model.isRunning():
+                self.snapshot_model.stop()
+
+                del self.snapshot_model
+                gc.collect()
+                self.snapshot_model = None
+
+        e.accept()
+
 

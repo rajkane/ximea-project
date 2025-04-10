@@ -90,11 +90,9 @@ class SnapshotsModel(qtc.QThread):
         try:
             self.thread = True
             self.__config_camera()
+            self.mutex.lock()
             for i in range(1, self.number+1):
-                self.mutex.lock()
-                if i > self.number:
-                    break
-                if self.cam.is_isexist():
+                if self.thread and self.cam.is_isexist():
                     self.check_conn.emit(True)
                     self.cam.set_gain(self.gain)
                     self.cam.set_exposure(self.exposure)
@@ -114,9 +112,13 @@ class SnapshotsModel(qtc.QThread):
                     cv2.imwrite(os.path.join(f"{self.path}/{datetime.datetime.now()}.jpeg"), img)
                     self.status.emit(f"Image: {i}")
                     self.progress.emit(i)
-                self.mutex.unlock()
+                    if i == self.number:
+                        self.status.emit("Done")
+                else:
+                    self.status.emit(f"Canceled, Last Image {i}")
+                    break
+            self.mutex.unlock()
 
-            self.status.emit("Done")
             self.__close_cam()
             self.stop()
 
