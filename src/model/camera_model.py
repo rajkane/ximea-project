@@ -61,7 +61,7 @@ class CameraModel(qtc.QThread):
         # self.cam.set_buffer_policy("XI_BP_UNSAFE")
         self.cam.set_imgdataformat("XI_RGB32")
         # self.cam.set_transport_data_target("XI_TRANSPORT_DATA_TARGET_UNIFIED")
-        self.cam.set_acq_buffer_size(512000000)
+        self.cam.set_acq_buffer_size(1000000000)
         self.cam.enable_auto_bandwidth_calculation()
         self.status.emit("Creating Instance of Image to Store Image Data and Metadata ...")
         if not isinstance(self.img, xiapi.Image):

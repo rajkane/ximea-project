@@ -35,7 +35,8 @@ class SnapshotDialog(qtw.QDialog, Ui_dialog_snapshots):
         self.sb_interval.setValue(self.interval)
         self.sb_interval.valueChanged.connect(self.__change_interval)
 
-        self.btn_action = qtw.QDialogButtonBox(qtw.QDialogButtonBox.StandardButton.Ok | qtw.QDialogButtonBox.StandardButton.Cancel)
+        self.btn_action = qtw.QDialogButtonBox(
+            qtw.QDialogButtonBox.StandardButton.Ok | qtw.QDialogButtonBox.StandardButton.Cancel)
         self.btn_action.accepted.connect(self.accept)
         self.btn_action.rejected.connect(self.reject)
 
@@ -45,6 +46,9 @@ class SnapshotDialog(qtw.QDialog, Ui_dialog_snapshots):
     def __change_gain(self, gain):
         self.lbl_gain_value.setText(f"{gain}dB")
         self.gain = gain
+        if isinstance(self.snapshot_model, SnapshotsModel):
+            if self.snapshot_model.isRunning():
+                self.snapshot_model.set_gain_camera(self.gain)
 
     def __get_exposure_1(self):
         n = 1000000
@@ -106,12 +110,13 @@ class SnapshotDialog(qtw.QDialog, Ui_dialog_snapshots):
             self.snapshot_model.set_number(self.sb_number_of_images.value())
             self.progressBar.setMaximum(self.sb_number_of_images.value())
             self.snapshot_model.set_path(dataset)
-            self.snapshot_model.set_scale_camera(.5)
+            self.snapshot_model.set_scale_camera(.4)
             self.snapshot_model.set_gain_camera(self.gain)
             self.__get_exposure_1()
             self.__get_exposure_2()
             self.snapshot_model.set_exposure_camera(self.exposure)
             self.snapshot_model.set_interval_camera(self.interval)
+            self.snapshot_model.check_conn.connect(self.__check_conn_snapshot)
             self.snapshot_model.update.connect(self.__update_image)
             self.snapshot_model.status.connect(self.__get_status)
             self.snapshot_model.progress.connect(self.__progress)
@@ -126,6 +131,17 @@ class SnapshotDialog(qtw.QDialog, Ui_dialog_snapshots):
                 gc.collect()
                 self.snapshot_model = None
 
+    def __check_conn_snapshot(self, check):
+        if check:
+            self.le_name_dataset.setEnabled(False)
+            self.tbtn_directory.setEnabled(False)
+            self.sb_number_of_images.setEnabled(False)
+            self.sb_interval.setEnabled(False)
+        else:
+            self.le_name_dataset.setEnabled(True)
+            self.tbtn_directory.setEnabled(True)
+            self.sb_number_of_images.setEnabled(True)
+            self.sb_interval.setEnabled(True)
 
     @qtc.pyqtSlot(qtg.QImage)
     def __update_image(self, img):

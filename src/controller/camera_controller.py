@@ -135,9 +135,6 @@ class MainWindow(qtw.QMainWindow, Ui_MainWindow):
         self.showNormal()
         self.__config_camera_window()
 
-    def resizeEvent(self, e):
-        self.__config_camera_window()
-
     def keyPressEvent(self, e):
         if e.key() == qtc.Qt.Key.Key_Escape:
             self.showNormal()

@@ -124,6 +124,12 @@ color: rgb(255, 255, 255);</string>
           <verstretch>0</verstretch>
          </sizepolicy>
         </property>
+        <property name="cursor">
+         <cursorShape>CrossCursor</cursorShape>
+        </property>
+        <property name="styleSheet">
+         <string notr="true">background-color: rgb(61, 56, 70);</string>
+        </property>
         <property name="frameShape">
          <enum>QFrame::Shape::Panel</enum>
         </property>

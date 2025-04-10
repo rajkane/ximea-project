@@ -72,6 +72,8 @@ class Ui_MainWindow(object):
         sizePolicy.setVerticalStretch(0)
         sizePolicy.setHeightForWidth(self.lbl_camera_stream.sizePolicy().hasHeightForWidth())
         self.lbl_camera_stream.setSizePolicy(sizePolicy)
+        self.lbl_camera_stream.setCursor(QtGui.QCursor(QtCore.Qt.CursorShape.CrossCursor))
+        self.lbl_camera_stream.setStyleSheet("background-color: rgb(61, 56, 70);")
         self.lbl_camera_stream.setFrameShape(QtWidgets.QFrame.Shape.Panel)
         self.lbl_camera_stream.setFrameShadow(QtWidgets.QFrame.Shadow.Raised)
         self.lbl_camera_stream.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
