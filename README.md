@@ -1,6 +1,6 @@
 # XIMEA Project
 
-<img src="./screenshot.png" alt="screenshot" width="600" height="auto">
+<img src="./screenshot.png" alt="screenshot" width="800" height="auto">
 
 ## What will the application be used for:
 - creating a dataset for image processing,
