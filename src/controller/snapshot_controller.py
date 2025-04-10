@@ -9,7 +9,6 @@ class SnapshotDialog(qtw.QDialog, Ui_dialog_snapshots):
     def __init__(self):
         super(SnapshotDialog, self).__init__()
         self.setupUi(self)
-        self.setModal(True)
         self.ds_name = None
         self.snapshot_model = None
         self.path = None

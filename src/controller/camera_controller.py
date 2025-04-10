@@ -71,6 +71,7 @@ class MainWindow(qtw.QMainWindow, Ui_MainWindow):
     def __open_snapshots_window(self):
         if not isinstance(self.snapshots_window, SnapshotDialog):
             self.snapshots_window = SnapshotDialog()
+        self.snapshots_window.setModal(True)
         self.snapshots_window.show()
         self.__stop_camera()
 
