@@ -58,6 +58,12 @@ color: rgb(255, 255, 255);</string>
           <verstretch>0</verstretch>
          </sizepolicy>
         </property>
+        <property name="minimumSize">
+         <size>
+          <width>60</width>
+          <height>0</height>
+         </size>
+        </property>
         <property name="text">
          <string>1/4000s</string>
         </property>
@@ -218,6 +224,13 @@ color: rgb(255, 255, 255);
        <widget class="QPushButton" name="btn_fill_dataset">
         <property name="text">
          <string>Fill Dataset</string>
+        </property>
+       </widget>
+      </item>
+      <item row="3" column="4">
+       <widget class="QPushButton" name="btn_learning">
+        <property name="text">
+         <string>Learning</string>
         </property>
        </widget>
       </item>

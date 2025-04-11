@@ -6,7 +6,7 @@ from ximea import xiapi
 from sfps import SFPS
 import cv2
 import torch
-
+from detecto import core
 
 class CameraModel(qtc.QThread):
     update = qtc.pyqtSignal(qtg.QImage, name="camera-signal")
@@ -40,9 +40,24 @@ class CameraModel(qtc.QThread):
     def set_scale_camera(self, scale: float):
         self.size = qtc.QSize(int(Const.WIDTH * scale), int(Const.HEIGHT * scale))
 
+    def detector_objects(self, model, frame):
+        labels, boxes, scores = model.predict(frame)
+        for i in range(boxes.shape[0]):
+            box = boxes[i]
+            if scores[i] > 90:
+                cv2.rectangle(frame, (int(box[0]), int(box[1])), (int(box[2]), int(box[3])), (0, 255, 150), 2)
+                cv2.rectangle(frame, (int(box[0]), int(box[1])),
+                              (int(box[0]) + 200, int(box[1]) + 35), (0, 0, 0), -1)
+                cv2.putText(frame, f"{labels[i]}: {int(scores[i] * 100)}%",
+                            (int(box[0]) + 15, int(box[1] + 25)),
+                            cv2.FONT_HERSHEY_PLAIN, 1.2, (0, 255, 150), 2)
+
     def __config_camera(self):
         # Ensure GPU is available
-        print(f"CUDA: {torch.zeros(1).cuda()}")
+        self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        print(self.device)
+        if self.device == "cuda":
+            torch.cuda.empty_cache()
 
         if not isinstance(self.mutex, qtc.QMutex):
             self.mutex = qtc.QMutex()
@@ -50,6 +65,7 @@ class CameraModel(qtc.QThread):
             self.sfps = SFPS(nframes=5, interval=1)
         if not isinstance(self.cam, xiapi.Camera):
             self.cam = xiapi.Camera()
+        self.mutex.lock()
         self.status.emit("Communication ...")
         self.cam.open_device_by_SN("UBFAS2438006")
         self.cam.enable_auto_wb()
@@ -70,6 +86,7 @@ class CameraModel(qtc.QThread):
         self.status.emit('Starting Data Acquisition...')
         self.cam.start_acquisition()
         self.status.emit('Started Data Acquisition')
+        self.mutex.unlock()
 
     def show_fps(self, img):
         fps = self.sfps.fps(format_spec='.1f')
@@ -104,6 +121,8 @@ class CameraModel(qtc.QThread):
     def run(self):
         try:
             self.thread = True
+            #if self.is_model is True:
+            #   self.model = core.Model.load(f"{}", self.__annot)
             self.__config_camera()
             while self.thread:
                 self.mutex.lock()
@@ -113,6 +132,7 @@ class CameraModel(qtc.QThread):
                     self.cam.set_exposure(self.exposure)
                     self.cam.get_image(self.img)
                     img = self.img.get_image_data_numpy(False)
+                    # self.detector_objects(model=self.model, frame=img)
                     self.show_fps(img)
                     convert = qtg.QImage(
                         img.data,

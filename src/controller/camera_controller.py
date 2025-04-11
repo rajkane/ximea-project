@@ -6,6 +6,7 @@ from src.external import qtw, qtc, qtg
 from src.view.mainwindow import Ui_MainWindow
 from src.model.camera_model import CameraModel
 from src.controller.snapshot_controller import SnapshotDialog
+from src.controller.learning_controller import LearningWindow
 from src.model.constants import Exposure
 
 
@@ -15,6 +16,7 @@ class MainWindow(qtw.QMainWindow, Ui_MainWindow):
         self.setupUi(self)
         self.cam_process = None
         self.snapshots_window = None
+        self.learning_window = None
         pixmap = qtg.QPixmap(os.path.join("./assets/video-camera-alt.png"))
         self.lbl_camera_stream.setPixmap(pixmap)
         self.scale = 1
@@ -37,6 +39,7 @@ class MainWindow(qtw.QMainWindow, Ui_MainWindow):
         self.btn_stop.setEnabled(False)
         self.btn_stop.clicked.connect(self.__stop_camera)
         self.btn_fill_dataset.clicked.connect(self.__open_snapshots_window)
+        self.btn_learning.clicked.connect(self.__open_learning_window)
 
     def __config_dial_gain(self):
         self.dial_gain.setEnabled(False)
@@ -74,6 +77,11 @@ class MainWindow(qtw.QMainWindow, Ui_MainWindow):
             self.snapshots_window = SnapshotDialog()
         self.snapshots_window.setModal(True)
         self.snapshots_window.show()
+
+    def __open_learning_window(self):
+        if not isinstance(self.learning_window, LearningWindow):
+            self.learning_window = LearningWindow()
+        self.learning_window.show()
 
     def __change_gain_camera(self, gain: int):
         self.lbl_gain_value.setText(f"{gain}dB")
