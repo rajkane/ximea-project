@@ -55,13 +55,25 @@ class LearningWindow(qtw.QMainWindow, Ui_LearningWindow):
         if self.le_dataset.text() != "" and self.le_annotation.text() != [""] and \
                 self.le_model_name.text() != "":
             self.upload_deep_learning_worker()
-            self.learning_worker.start()
+
             self.pte_report.clear()
+
+            # set augmentation
+            self.learning_worker.set_resize(self.sb_resize.value())
+            self.learning_worker.set_random_horizontal_flip(self.dsb_hor_flip.value())
+            self.learning_worker.set_random_vertical_flip(self.dsb_vert_flip.value())
+            self.learning_worker.set_random_vertical_flip(self.dsb_vert_flip.value())
+            self.learning_worker.set_random_autocontrast(self.dsb_auto_contr.value())
+            self.learning_worker.set_random_equalize(self.dsb_equalize.value())
+            self.learning_worker.set_random_rotation(self.sb_rotation.value())
+
             self.learning_worker.enabled_learning_process.connect(self.__action_running_process)
             self.learning_worker.learn.connect(self.__update_deep_learning)
             self.learning_worker.learn_graph.connect(self.__update_deep_learning_graph)
             self.learning_worker.status.connect(self.__message_status)
             self.learning_worker.exception.connect(self.__message_exception)
+            self.learning_worker.start()
+
         else:
             self.__message_exception("Check input data!")
 

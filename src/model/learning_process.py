@@ -2,6 +2,8 @@ import os
 
 import torchvision
 import torch
+from torchvision.transforms.v2.functional import horizontal_flip
+
 from src.external import qtc
 from detecto import utils
 from torchvision import transforms
@@ -31,6 +33,12 @@ class WorkerRCNN(qtc.QThread):
         self.epochs = epochs
         self.lr_step_size = lr_step_size
         self.learning_rate = learning_rate
+        self.resize = None
+        self.horizontal = None
+        self.vertical = None
+        self.autocontrast = None
+        self.equalize = None
+        self.rotation = None
         self.model_name = model_name
         self.settings = None
         self.custom_transforms = None
@@ -76,6 +84,24 @@ class WorkerRCNN(qtc.QThread):
     def save(self, file):
         torch.save(self._model.state_dict(), file)
 
+    def set_resize(self, resize):
+        self.resize = resize
+
+    def set_random_horizontal_flip(self, horizontal):
+        self.horizontal = horizontal
+
+    def set_random_vertical_flip(self, vertical):
+        self.vertical = vertical
+
+    def set_random_autocontrast(self, autocontrast):
+        self.autocontrast = autocontrast
+
+    def set_random_equalize(self, equalize):
+        self.equalize = equalize
+
+    def set_random_rotation(self, rotation):
+        self.rotation = rotation
+
     def get_augment(self):
         """self.settings = qtc.QSettings("augmentation.ini", qtc.QSettings.format.IniFormat)
         resize = int(self.settings.value("resize", int))
@@ -88,12 +114,12 @@ class WorkerRCNN(qtc.QThread):
 
         self.custom_transforms = transforms.Compose([
             transforms.ToPILImage(),
-            transforms.Resize((400, 300)),
-            transforms.RandomHorizontalFlip(p=0),
-            transforms.RandomVerticalFlip(p=0),
-            transforms.RandomAutocontrast(p=0.5),
-            transforms.RandomEqualize(p=0.5),
-            transforms.RandomRotation(degrees=(-90, 90)),
+            transforms.Resize((self.resize, self.resize)),
+            transforms.RandomHorizontalFlip(p=self.horizontal),
+            transforms.RandomVerticalFlip(p=self.vertical),
+            transforms.RandomAutocontrast(p=self.autocontrast),
+            transforms.RandomEqualize(p=self.equalize),
+            transforms.RandomRotation(degrees=(-1 * self.rotation, self.rotation)),
             transforms.ToTensor(),
             utils.normalize_transform(),
         ])
@@ -118,8 +144,8 @@ class WorkerRCNN(qtc.QThread):
             self.learn.emit(f"Learning Rate: {self.learning_rate}")
             self.learn.emit(f"Model Name: {self.model_name}")
 
-            dashed = "-" * 100
-            equals = "=" * 50
+            # dashed = "-" * 100
+            # equals = "=" * 50
             # self.learn.emit(f"{equals}")
             self.learn.emit("")
 
@@ -237,7 +263,7 @@ class WorkerRCNN(qtc.QThread):
                 if len(losses) > 0:
                     return losses
 
-            self.learn.emit(f"{dashed}")
+            # self.learn.emit(f"{dashed}")
 
             fit(
                 dataset=loader,

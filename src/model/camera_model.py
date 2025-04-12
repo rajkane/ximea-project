@@ -1,5 +1,9 @@
 import gc
+import os
 import time
+
+import numpy as np
+
 from src.model.constants import Const
 from src.external import qtc, qtg
 from ximea import xiapi
@@ -14,10 +18,14 @@ class CameraModel(qtc.QThread):
     exception = qtc.pyqtSignal(str, name="exception-signal")
     check_conn = qtc.pyqtSignal(bool, name="check-conn-signal")
 
-    def __init__(self):
+    def __init__(self, model :str = None, annot :list = None):
         super(CameraModel, self).__init__()
         self.mutex = None
         self.thread = False
+        self.model =  None
+        self.__model = model
+        self.__annot = annot
+        self.is_model = False if (self.__model is None and self.__annot is None) else True
         self.cam = None
         self.img = None
         self.gain = None
@@ -25,39 +33,41 @@ class CameraModel(qtc.QThread):
         self.size = Const.SIZE
         self.sfps = None
 
+    def set_model(self, model: str):
+        self.__model = model
+
+    def set_annot(self, annot: list):
+        self.__annot = annot
+
     def set_gain_camera(self, gain: float):
         self.gain = gain
-
-    def get_gain_camera(self):
-        return self.gain
 
     def set_exposure_camera(self, exposure: int):
         self.exposure = exposure
 
-    def get_exposure_camera(self):
-        return self.exposure
-
     def set_scale_camera(self, scale: float):
         self.size = qtc.QSize(int(Const.WIDTH * scale), int(Const.HEIGHT * scale))
 
-    def detector_objects(self, model, frame):
+    @staticmethod
+    def detector_objects(model, frame):
         labels, boxes, scores = model.predict(frame)
         for i in range(boxes.shape[0]):
             box = boxes[i]
-            if scores[i] > 90:
+            if scores[i] > .85:
                 cv2.rectangle(frame, (int(box[0]), int(box[1])), (int(box[2]), int(box[3])), (0, 255, 150), 2)
                 cv2.rectangle(frame, (int(box[0]), int(box[1])),
                               (int(box[0]) + 200, int(box[1]) + 35), (0, 0, 0), -1)
                 cv2.putText(frame, f"{labels[i]}: {int(scores[i] * 100)}%",
                             (int(box[0]) + 15, int(box[1] + 25)),
-                            cv2.FONT_HERSHEY_PLAIN, 1.2, (0, 255, 150), 2)
+                            cv2.FONT_HERSHEY_PLAIN, 1.5, (0, 255, 150), 1)
 
     def __config_camera(self):
         # Ensure GPU is available
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
-        print(self.device)
         if self.device == "cuda":
             torch.cuda.empty_cache()
+
+        self.is_model = False if (self.__model is None and self.__annot is None) else True
 
         if not isinstance(self.mutex, qtc.QMutex):
             self.mutex = qtc.QMutex()
@@ -74,8 +84,8 @@ class CameraModel(qtc.QThread):
         self.cam.get_proc_num_threads_maximum()
         self.cam.set_gain(self.gain)
         self.cam.set_exposure(self.exposure)
-        # self.cam.set_buffer_policy("XI_BP_UNSAFE")
-        self.cam.set_imgdataformat("XI_RGB32")
+        self.cam.set_buffer_policy("XI_BP_UNSAFE")
+        self.cam.set_imgdataformat("XI_RGB24")
         # self.cam.set_transport_data_target("XI_TRANSPORT_DATA_TARGET_UNIFIED")
         self.cam.set_acq_buffer_size(1000000000)
         self.cam.enable_auto_bandwidth_calculation()
@@ -102,7 +112,6 @@ class CameraModel(qtc.QThread):
             lineType=cv2.LINE_AA
         )
 
-
     def __close_cam(self):
         self.mutex.lock()
         self.status.emit("Stopping Acquisition ...")
@@ -121,9 +130,10 @@ class CameraModel(qtc.QThread):
     def run(self):
         try:
             self.thread = True
-            #if self.is_model is True:
-            #   self.model = core.Model.load(f"{}", self.__annot)
+            if self.is_model:
+               self.model = core.Model.load(self.__model, self.__annot)
             self.__config_camera()
+
             while self.thread:
                 self.mutex.lock()
                 if self.cam.is_isexist():
@@ -131,14 +141,18 @@ class CameraModel(qtc.QThread):
                     self.cam.set_gain(self.gain)
                     self.cam.set_exposure(self.exposure)
                     self.cam.get_image(self.img)
-                    img = self.img.get_image_data_numpy(False)
-                    # self.detector_objects(model=self.model, frame=img)
+                    img = self.img.get_image_data_numpy(True)
+                    img = cv2.resize(img, (800, 600))
+
                     self.show_fps(img)
+                    if self.is_model:
+                        self.detector_objects(model=self.model, frame=img)
+
                     convert = qtg.QImage(
                         img.data,
                         img.shape[1],
                         img.shape[0],
-                        qtg.QImage.Format.Format_RGB32
+                        qtg.QImage.Format.Format_RGB888
                     )
 
                     pic = convert.scaled(self.size, Const.KEEP_ASPECT_RATION_BY_EXPANDING, Const.FAST_TRANSFORMATION)
