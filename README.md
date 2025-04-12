@@ -2,6 +2,8 @@
 
 <img src="./screenshot.png" alt="screenshot" width="800" height="auto">
 
+<img src="./screenshot3.png" alt="screenshot" width="800" height="auto">
+
 ## What will the application be used for:
 - creating a dataset for image processing,
 - learning using fast R-CNN
