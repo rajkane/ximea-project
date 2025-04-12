@@ -1,6 +1,5 @@
 import gc
 import os
-from pathlib import Path
 from src.model.constants import Const
 from fractions import Fraction
 from src.external import qtw, qtc, qtg

@@ -1,9 +1,5 @@
 import gc
-import os
 import time
-
-import numpy as np
-
 from src.model.constants import Const
 from src.external import qtc, qtg
 from ximea import xiapi
