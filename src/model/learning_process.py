@@ -1,14 +1,10 @@
 import os
-
 import torchvision
 import torch
-from torchvision.transforms.v2.functional import horizontal_flip
-
 from src.external import qtc
 from detecto import utils
 from torchvision import transforms
 from torchvision.models.detection.faster_rcnn import FastRCNNPredictor
-from pathlib import Path
 from .rcnn_model import Dataset, DataLoader
 from tqdm import tqdm
 
