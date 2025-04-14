@@ -63,16 +63,16 @@ class SnapshotsModel(qtc.QThread):
         if not isinstance(self.cam, xiapi.Camera):
             self.cam = xiapi.Camera()
         self.cam.open_device_by_SN("UBFAS2438006")
+        self.cam.enable_auto_bandwidth_calculation()
         self.cam.set_debug_level("XI_DL_FATAL")
-        self.cam.get_proc_num_threads_maximum()
+        self.cam.set_proc_num_threads(4)
         self.cam.enable_auto_wb()
+        self.cam.set_buffer_policy("XI_BP_UNSAFE")
+        self.cam.set_imgdataformat("XI_RGB24")
+        # self.cam.set_transport_data_target("XI_TRANSPORT_DATA_TARGET_UNIFIED")
+        # self.cam.set_acq_buffer_size(512000000)
         self.cam.set_gain(Const.GAIN)
         self.cam.set_exposure(Const.EXPOSURE)
-        # self.cam.set_buffer_policy("XI_BP_UNSAFE")
-        self.cam.set_imgdataformat("XI_RGB32")
-        # self.cam.set_transport_data_target("XI_TRANSPORT_DATA_TARGET_UNIFIED")
-        self.cam.set_acq_buffer_size(512000000)
-        self.cam.enable_auto_bandwidth_calculation()
         if not isinstance(self.img, xiapi.Image):
             self.img = xiapi.Image()
         self.cam.start_acquisition()
@@ -98,18 +98,23 @@ class SnapshotsModel(qtc.QThread):
                     self.cam.set_exposure(self.exposure)
                     self.get_interval_camera()
                     self.cam.get_image(self.img)
-                    img = self.img.get_image_data_numpy(False)
+                    img = self.img.get_image_data_numpy(True)
+                    img = cv2.resize(img, (800, 600))
 
                     convert = qtg.QImage(
                         img.data,
                         img.shape[1],
                         img.shape[0],
-                        qtg.QImage.Format.Format_RGB32
+                        qtg.QImage.Format.Format_RGB888
                     )
 
                     pic = convert.scaled(self.size, Const.KEEP_ASPECT_RATION_BY_EXPANDING, Const.FAST_TRANSFORMATION)
                     self.update.emit(pic)
-                    cv2.imwrite(os.path.join(f"{self.path}/{datetime.datetime.now()}.jpeg"), img)
+                    check_count = int(self.number * .8)
+                    if i < check_count:
+                        cv2.imwrite(os.path.join(f"{self.path}/train/{datetime.datetime.now()}.jpeg"), img)
+                    else:
+                        cv2.imwrite(os.path.join(f"{self.path}/valid/{datetime.datetime.now()}.jpeg"), img)
                     self.status.emit(f"Image: {i}")
                     self.progress.emit(i)
                     if i == self.number:

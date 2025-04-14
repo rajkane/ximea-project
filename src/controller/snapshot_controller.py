@@ -103,6 +103,8 @@ class SnapshotDialog(qtw.QDialog, Ui_dialog_snapshots):
             dataset = os.path.join(f"{self.path}/{self.ds_name}")
             if not os.path.exists(dataset):
                 os.makedirs(dataset)
+                os.makedirs(f"{dataset}/train")
+                os.makedirs(f"{dataset}/valid")
 
             if not isinstance(self.snapshot_model, SnapshotsModel):
                 self.snapshot_model = SnapshotsModel()

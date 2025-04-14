@@ -56,7 +56,7 @@ class CameraModel(qtc.QThread):
         labels, boxes, scores = model.predict(frame)
         for i in range(boxes.shape[0]):
             box = boxes[i]
-            if scores[i] > .85:
+            if scores[i] > .80:
                 cv2.rectangle(frame, (int(box[0]), int(box[1])), (int(box[2]), int(box[3])), (0, 255, 150), 2)
                 cv2.rectangle(frame, (int(box[0]), int(box[1])),
                               (int(box[0]) + 200, int(box[1]) + 35), (0, 0, 0), -1)
@@ -80,19 +80,19 @@ class CameraModel(qtc.QThread):
         self.status.emit("Communication ...")
         self.cam.open_device_by_SN("UBFAS2438006")
         self.status.emit("Device Opened")
+        self.cam.set_proc_num_threads(8)
+        self.cam.enable_auto_bandwidth_calculation()
         self.cam.set_debug_level("XI_DL_FATAL")
-        self.cam.get_proc_num_threads_maximum()
+        # self.cam.set_acq_buffer_size(1500000000)
         self.cam.enable_auto_wb()
+        self.cam.set_buffer_policy("XI_BP_UNSAFE")
+        self.cam.set_imgdataformat("XI_RGB24")
+        # self.cam.set_transport_data_target("XI_TRANSPORT_DATA_TARGET_UNIFIED")
         if self.__auto is False:
             self.cam.enable_aeag()
         else:
             self.cam.set_gain(self.__gain)
             self.cam.set_exposure(self.__exposure)
-        self.cam.set_buffer_policy("XI_BP_UNSAFE")
-        self.cam.set_imgdataformat("XI_RGB24")
-        # self.cam.set_transport_data_target("XI_TRANSPORT_DATA_TARGET_UNIFIED")
-        self.cam.set_acq_buffer_size(1500000000)
-        self.cam.enable_auto_bandwidth_calculation()
         self.status.emit("Creating Instance of Image to Store Image Data and Metadata ...")
         if not isinstance(self.img, xiapi.Image):
             self.img = xiapi.Image()
