@@ -88,13 +88,23 @@ class MainWindow(qtw.QMainWindow, Ui_MainWindow):
                     self.cam_process.set_is_model(False)
 
     def __open_model(self):
-        path_model, _ = qtw.QFileDialog.getOpenFileName(self, "Open Model", "", initialFilter="Model (*.pth)")
+        path_model, _ = qtw.QFileDialog.getOpenFileName(
+            self,
+            "Open Model",
+            "",
+            filter="Model (*.pth)",
+            initialFilter="Model (*.pth)")
         if path_model:
             self.path_model = path_model
         self.le_model.setText(os.path.basename(path_model))
 
     def __open_annotation(self):
-        path_annotation, _ = qtw.QFileDialog.getOpenFileName(self, "Open Annotation", "", initialFilter="Annotation (*.txt)")
+        path_annotation, _ = qtw.QFileDialog.getOpenFileName(
+            self,
+            "Open Annotation",
+            "",
+            filter="Annotation (*.txt)",
+            initialFilter="Annotation (*.txt)")
         if path_annotation:
             with open(path_annotation, 'r') as f:
                 annotation = [name.rstrip() for name in f]

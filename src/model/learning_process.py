@@ -40,6 +40,7 @@ class WorkerRCNN(qtc.QThread):
         self.custom_transforms = None
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         if self.device == "cuda":
+            torch.amp.autocast('cuda')
             torch.cuda.empty_cache()
 
         self._model = torchvision.models.detection.fasterrcnn_resnet50_fpn(pretrained=True)
