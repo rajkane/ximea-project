@@ -23,7 +23,7 @@ class MainWindow(qtw.QMainWindow, Ui_MainWindow):
         self.lbl_camera_stream.setPixmap(pixmap)
         self.scale = 1
         self.__config_buttons()
-        self.__config_dial_gain()
+        self.__config_other_objects()
         self.statusBar().showMessage("Ready")
 
     def __config_camera_window(self):
@@ -42,10 +42,14 @@ class MainWindow(qtw.QMainWindow, Ui_MainWindow):
         self.btn_stop.clicked.connect(self.__stop_camera)
         self.btn_fill_dataset.clicked.connect(self.__open_snapshots_window)
         self.btn_learning.clicked.connect(self.__open_learning_window)
+        self.tbtn_model.setEnabled(False)
         self.tbtn_model.clicked.connect(self.__open_model)
+        self.tbtn_annotation.setEnabled(False)
         self.tbtn_annotation.clicked.connect(self.__open_annotation)
+        self.chb_model.checkStateChanged.connect(self.__enable_model)
+        self.chb_manual.checkStateChanged.connect(self.__auto_gain_exposure)
 
-    def __config_dial_gain(self):
+    def __config_other_objects(self):
         self.dial_gain.setEnabled(False)
         self.lbl_gain_value.setText(f"{self.dial_gain.value()}dB")
         self.dial_gain.valueChanged.connect(self.__change_gain_camera)
@@ -53,6 +57,35 @@ class MainWindow(qtw.QMainWindow, Ui_MainWindow):
         self.dial_exposure.setEnabled(False)
         self.lbl_exposure_value.setText("1/4000s")
         self.dial_exposure.valueChanged.connect(self.__change_exposure_camera)
+
+    def __auto_gain_exposure(self):
+        if self.chb_manual.isChecked():
+            self.dial_gain.setEnabled(True)
+            self.dial_exposure.setEnabled(True)
+            if isinstance(self.cam_process, CameraModel):
+                if self.cam_process.isRunning():
+                    self.cam_process.set_auto_gain_exposure(True)
+        else:
+            self.dial_gain.setEnabled(False)
+            self.dial_exposure.setEnabled(False)
+            if isinstance(self.cam_process, CameraModel):
+                if self.cam_process.isRunning():
+                    self.cam_process.set_auto_gain_exposure(False)
+
+
+    def __enable_model(self):
+        if self.chb_model.isChecked():
+            self.tbtn_model.setEnabled(True)
+            self.tbtn_annotation.setEnabled(True)
+            if isinstance(self.cam_process, CameraModel):
+                if self.cam_process.isRunning():
+                    self.cam_process.set_is_model(True)
+        else:
+            self.tbtn_model.setEnabled(False)
+            self.tbtn_annotation.setEnabled(False)
+            if isinstance(self.cam_process, CameraModel):
+                if self.cam_process.isRunning():
+                    self.cam_process.set_is_model(False)
 
     def __open_model(self):
         path_model, _ = qtw.QFileDialog.getOpenFileName(self, "Open Model", "", initialFilter="Model (*.pth)")
@@ -70,14 +103,16 @@ class MainWindow(qtw.QMainWindow, Ui_MainWindow):
             self.le_annotation.setText(os.path.basename(path_annotation))
 
     def __start_camera(self):
-        print(self.path_model, self.annotation)
-        if not isinstance(self.cam_process, CameraModel):
-            self.cam_process = CameraModel(
-                model=self.path_model,
-                annot=self.annotation
-            )
-        self.cam_process.set_model(model=self.path_model)
-        self.cam_process.set_annot(annot=self.annotation)
+        #if not isinstance(self.cam_process, CameraModel):
+        self.cam_process = CameraModel()
+        if self.chb_model.isChecked():
+            if self.path_model is not None and self.annotation is not None:
+                self.cam_process.set_is_model(True)
+                self.cam_process.set_model(model=self.path_model)
+                self.cam_process.set_annot(annot=self.annotation)
+        else:
+            self.cam_process.set_is_model(False)
+        self.cam_process.set_auto_gain_exposure(False)
         self.cam_process.update.connect(self.__update_image)
         self.cam_process.status.connect(self.__get_status)
         self.cam_process.check_conn.connect(self.__check_conn_camera)
@@ -126,22 +161,25 @@ class MainWindow(qtw.QMainWindow, Ui_MainWindow):
         if check:
             self.btn_stop.setEnabled(True)
             self.btn_start.setEnabled(False)
-            self.dial_gain.setEnabled(True)
-            self.dial_exposure.setEnabled(True)
+            # self.dial_gain.setEnabled(True)
+            # self.dial_exposure.setEnabled(True)
             self.tbtn_model.setEnabled(False)
             self.tbtn_annotation.setEnabled(False)
             self.le_model.setEnabled(False)
             self.le_annotation.setEnabled(False)
+            self.btn_fill_dataset.setEnabled(False)
             self.btn_learning.setEnabled(False)
         else:
             self.btn_stop.setEnabled(False)
             self.btn_start.setEnabled(True)
-            self.dial_gain.setEnabled(False)
-            self.dial_exposure.setEnabled(False)
-            self.tbtn_model.setEnabled(True)
-            self.tbtn_annotation.setEnabled(True)
+            # self.dial_gain.setEnabled(False)
+            # self.dial_exposure.setEnabled(False)
+            if self.chb_model.isChecked():
+                self.tbtn_model.setEnabled(True)
+                self.tbtn_annotation.setEnabled(True)
             self.le_model.setEnabled(True)
             self.le_annotation.setEnabled(True)
+            self.btn_fill_dataset.setEnabled(True)
             self.btn_learning.setEnabled(True)
 
     @qtc.pyqtSlot(qtg.QImage)
@@ -150,6 +188,12 @@ class MainWindow(qtw.QMainWindow, Ui_MainWindow):
 
     @qtc.pyqtSlot(str)
     def __get_status(self, status):
+        self.statusBar().setStyleSheet(
+            """
+                background-color: green;
+                color: white;
+            """
+        )
         self.statusBar().showMessage(status)
 
     @qtc.pyqtSlot(str)

@@ -18,16 +18,23 @@ class CameraModel(qtc.QThread):
         super(CameraModel, self).__init__()
         self.mutex = None
         self.thread = False
-        self.model =  None
+        self.__is_model = None
+        self.__auto = None
+        self.__gain = None
+        self.__exposure = None
         self.__model = model
         self.__annot = annot
-        self.is_model = False if (self.__model is None and self.__annot is None) else True
+        self.__size = Const.SIZE
+        self.__sfps = None
+        self.model =  None
         self.cam = None
         self.img = None
-        self.gain = None
-        self.exposure = None
-        self.size = Const.SIZE
-        self.sfps = None
+
+    def set_is_model(self, is_model: bool):
+        self.__is_model = is_model
+
+    def set_auto_gain_exposure(self, auto: bool):
+        self.__auto = auto
 
     def set_model(self, model: str):
         self.__model = model
@@ -36,13 +43,13 @@ class CameraModel(qtc.QThread):
         self.__annot = annot
 
     def set_gain_camera(self, gain: float):
-        self.gain = gain
+        self.__gain = gain
 
     def set_exposure_camera(self, exposure: int):
-        self.exposure = exposure
+        self.__exposure = exposure
 
     def set_scale_camera(self, scale: float):
-        self.size = qtc.QSize(int(Const.WIDTH * scale), int(Const.HEIGHT * scale))
+        self.__size = qtc.QSize(int(Const.WIDTH * scale), int(Const.HEIGHT * scale))
 
     @staticmethod
     def detector_objects(model, frame):
@@ -63,27 +70,28 @@ class CameraModel(qtc.QThread):
         if self.device == "cuda":
             torch.cuda.empty_cache()
 
-        self.is_model = False if (self.__model is None and self.__annot is None) else True
-
         if not isinstance(self.mutex, qtc.QMutex):
             self.mutex = qtc.QMutex()
-        if not isinstance(self.sfps, SFPS):
-            self.sfps = SFPS(nframes=5, interval=1)
+        if not isinstance(self.__sfps, SFPS):
+            self.__sfps = SFPS(nframes=5, interval=1)
         if not isinstance(self.cam, xiapi.Camera):
             self.cam = xiapi.Camera()
         self.mutex.lock()
         self.status.emit("Communication ...")
         self.cam.open_device_by_SN("UBFAS2438006")
-        self.cam.enable_auto_wb()
         self.status.emit("Device Opened")
         self.cam.set_debug_level("XI_DL_FATAL")
         self.cam.get_proc_num_threads_maximum()
-        self.cam.set_gain(self.gain)
-        self.cam.set_exposure(self.exposure)
+        self.cam.enable_auto_wb()
+        if self.__auto is False:
+            self.cam.enable_aeag()
+        else:
+            self.cam.set_gain(self.__gain)
+            self.cam.set_exposure(self.__exposure)
         self.cam.set_buffer_policy("XI_BP_UNSAFE")
         self.cam.set_imgdataformat("XI_RGB24")
         # self.cam.set_transport_data_target("XI_TRANSPORT_DATA_TARGET_UNIFIED")
-        self.cam.set_acq_buffer_size(1000000000)
+        self.cam.set_acq_buffer_size(1500000000)
         self.cam.enable_auto_bandwidth_calculation()
         self.status.emit("Creating Instance of Image to Store Image Data and Metadata ...")
         if not isinstance(self.img, xiapi.Image):
@@ -95,7 +103,7 @@ class CameraModel(qtc.QThread):
         self.mutex.unlock()
 
     def show_fps(self, img):
-        fps = self.sfps.fps(format_spec='.1f')
+        fps = self.__sfps.fps(format_spec='.1f')
         cv2.rectangle(img, Const.START_POINT_BG_FPS, Const.END_POINT_BG_FPS, Const.RECT_COLOR_BG, Const.THICKNEES_RECTANGLE)
         cv2.putText(
             img,
@@ -126,22 +134,24 @@ class CameraModel(qtc.QThread):
     def run(self):
         try:
             self.thread = True
-            if self.is_model:
-               self.model = core.Model.load(self.__model, self.__annot)
             self.__config_camera()
-
+            if self.__is_model and self.__model is not None and self.__annot is not None:
+                self.model = core.Model.load(self.__model, self.__annot)
             while self.thread:
                 self.mutex.lock()
                 if self.cam.is_isexist():
                     self.check_conn.emit(True)
-                    self.cam.set_gain(self.gain)
-                    self.cam.set_exposure(self.exposure)
+                    if self.__auto is False:
+                        self.cam.enable_aeag()
+                    else:
+                        self.cam.set_gain(self.__gain)
+                        self.cam.set_exposure(self.__exposure)
                     self.cam.get_image(self.img)
                     img = self.img.get_image_data_numpy(True)
                     img = cv2.resize(img, (800, 600))
 
                     self.show_fps(img)
-                    if self.is_model:
+                    if self.__is_model and self.__model is not None and self.__annot is not None:
                         self.detector_objects(model=self.model, frame=img)
 
                     convert = qtg.QImage(
@@ -151,10 +161,10 @@ class CameraModel(qtc.QThread):
                         qtg.QImage.Format.Format_RGB888
                     )
 
-                    pic = convert.scaled(self.size, Const.KEEP_ASPECT_RATION_BY_EXPANDING, Const.FAST_TRANSFORMATION)
+                    pic = convert.scaled(self.__size, Const.KEEP_ASPECT_RATION_BY_EXPANDING, Const.FAST_TRANSFORMATION)
                     self.update.emit(pic)
                     self.status.emit("Camera Streaming ...")
-                    time.sleep(self.exposure / Const.WAIT_EXPOSURE)
+                    time.sleep(self.__exposure / Const.WAIT_EXPOSURE)
                 else:
                     break
                 self.mutex.unlock()
@@ -166,11 +176,12 @@ class CameraModel(qtc.QThread):
 
         finally:
             self.stop()
-            del self.sfps
+            del self.__sfps
             del self.cam
             del self.img
+            del self.model
             gc.collect()
-            self.sfps, self.cam, self.img = None, None, None
+            self.sfps, self.cam, self.img, self.model = None, None, None, None
 
     def stop(self):
         if self.isRunning():
