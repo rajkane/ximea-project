@@ -72,7 +72,6 @@ class MainWindow(qtw.QMainWindow, Ui_MainWindow):
                 if self.cam_process.isRunning():
                     self.cam_process.set_auto_gain_exposure(False)
 
-
     def __enable_model(self):
         if self.chb_model.isChecked():
             self.tbtn_model.setEnabled(True)
@@ -144,12 +143,13 @@ class MainWindow(qtw.QMainWindow, Ui_MainWindow):
         self.__stop_camera()
         if not isinstance(self.snapshots_window, SnapshotDialog):
             self.snapshots_window = SnapshotDialog()
-        self.snapshots_window.setModal(True)
+        self.snapshots_window.setWindowModality(qtc.Qt.WindowModality.ApplicationModal)
         self.snapshots_window.show()
 
     def __open_learning_window(self):
         if not isinstance(self.learning_window, LearningWindow):
             self.learning_window = LearningWindow()
+        self.learning_window.setWindowModality(qtc.Qt.WindowModality.ApplicationModal)
         self.learning_window.show()
 
     def __change_gain_camera(self, gain: int):
