@@ -44,7 +44,7 @@ class WorkerRCNN(qtc.QThread):
             torch.cuda.empty_cache()
 
         self._model = torchvision.models.detection.fasterrcnn_resnet50_fpn(pretrained=True)
-
+        self.eval = self._model.eval()
         if self.annotation:
             # Get the number of input features for the classifier
             in_features = self._model.roi_heads.box_predictor.cls_score.in_features
@@ -121,6 +121,117 @@ class WorkerRCNN(qtc.QThread):
             utils.normalize_transform(),
         ])
 
+    def fit(self, dataset, val_dataset=None, epochs=10, learning_rate=0.005, momentum=0.9,
+            weight_decay=0.0005, gamma=0.1, lr_step_size=3, verbose=False):
+
+        if verbose and self.device == torch.device('cpu'):
+            self.learn.emit('It looks like you\'re training your model on a CPU. '
+                  'Consider switching to a GPU; otherwise, this method '
+                  'can take hours upon hours or even days to finish. '
+                  'For more information, see https://detecto.readthedocs.io/'
+                  'en/latest/usage/quickstart.html#technical-requirements')
+
+        # Convert dataset to data loader if not already
+        if not isinstance(dataset, DataLoader):
+            dataset = DataLoader(dataset, shuffle=True)
+
+        if val_dataset is not None and not isinstance(val_dataset, DataLoader):
+            val_dataset = DataLoader(val_dataset)
+
+        data = []
+        losses = []
+        # Get parameters that have grad turned on (i.e. parameters that should be trained)
+        parameters = [par for par in self._model.parameters() if par.requires_grad]
+        # Create an optimizer that uses SGD (stochastic gradient descent) to train the parameters
+        optimizer = torch.optim.SGD(parameters, lr=learning_rate, momentum=momentum,
+                                    weight_decay=weight_decay)
+        # Create a learning rate scheduler that decreases learning rate by gamma every lr_step_size epochs
+        lr_scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=lr_step_size, gamma=gamma)
+
+        # Train on the entire dataset for the specified number of times (epochs)
+        for epoch in range(epochs):
+            if self.thread_active is False:
+                break
+
+            # status emit deep learning process
+            self.status.emit(f"Deep Learning in process")
+
+            # if verbose:
+            # print('Epoch {} of {}'.format(epoch + 1, epochs))
+
+            # Training step
+            self._model.train()
+
+            # if verbose:
+            # print('Begin iterating over training dataset')
+
+            iterable = tqdm(
+                dataset,
+                position=0,
+                leave=True,
+                bar_format="{desc:<4}{bar:30}{percentage:3.0f}% {r_bar}") if verbose else dataset
+
+            for images, targets in iterable:
+                if self.thread_active is False:
+                    break
+                self.convert_to_int_labels(targets)
+                images, targets = self.to_device(images, targets)
+
+                # Calculate the model's loss (i.e. how well it does on the current
+                # image and target, with a lower loss being better)
+                loss_dict = self._model(images, targets)
+                total_loss = sum(loss for loss in loss_dict.values())
+
+                # Zero any old/existing gradients on the model's parameters
+                optimizer.zero_grad()
+                # Compute gradients for each parameter based on the current loss calculation
+                total_loss.backward()
+                # Update model parameters from gradients: param -= learning_rate * param.grad
+                optimizer.step()
+                self.status.emit(f"Iterating over training set: {iterable}")
+
+            # Validation step
+            if val_dataset is not None:
+                avg_loss = 0
+                with torch.no_grad():
+                    # if verbose:
+                    # print('Begin iterating over validation dataset')
+
+                    iterable = tqdm(
+                        val_dataset,
+                        position=0,
+                        leave=True,
+                        bar_format="{desc:<4}{bar:30}{percentage:3.0f}% {r_bar}") if verbose else val_dataset
+                    for images, targets in iterable:
+                        if self.thread_active is False:
+                            break
+                        self.convert_to_int_labels(targets)
+                        images, targets = self.to_device(images, targets)
+                        loss_dict = self._model(images, targets)
+                        total_loss = sum(loss for loss in loss_dict.values())
+                        avg_loss += total_loss.item()
+                        self.status.emit(f"Iterating over validation set: {iterable}")
+
+                if avg_loss != 0:
+                    avg_loss /= len(val_dataset.dataset)
+                losses.append(avg_loss)
+
+                # if verbose:
+                # print('Loss: {}'.format(avg_loss))
+
+                if self.thread_active is True:
+                    self.learn.emit(
+                        f"Epoch: {epoch + 1:003d}/{epochs:003d}\tLoss: {avg_loss:0005.4f}")
+                    # self.learn.emit(f"{dashed}")
+                    data.append((epoch + 1, avg_loss))
+                    self.learn_graph.emit(data)
+
+            # Update the learning rate every few epochs
+            lr_scheduler.step()
+
+        if len(losses) > 0:
+            return losses
+
     def run(self):
         self.thread_active = True
         if self.thread_active:
@@ -129,6 +240,7 @@ class WorkerRCNN(qtc.QThread):
                                     transform=self.get_augment())
             test_dataset = Dataset(f"{self.dataset_name}/valid/")
             loader = DataLoader(train_dataset, batch_size=self.batch_size, shuffle=True)
+
             # model = Model(self.annotation)
 
             self.learn.emit("\n")
@@ -140,129 +252,17 @@ class WorkerRCNN(qtc.QThread):
             self.learn.emit(f"Lr Step Size: {self.lr_step_size}")
             self.learn.emit(f"Learning Rate: {self.learning_rate}")
             self.learn.emit(f"Model Name: {self.model_name}")
-
-            # dashed = "-" * 100
-            # equals = "=" * 50
-            # self.learn.emit(f"{equals}")
-            self.learn.emit("")
-
-            self.learn.emit(f"Deep Learning in process")
-            self.learn.emit("")
-
-            def fit(dataset, val_dataset=None, epochs=10, learning_rate=0.005, momentum=0.9,
-                    weight_decay=0.0005, gamma=0.1, lr_step_size=3, verbose=True):
-
-                if verbose and self.device == torch.device('cpu'):
-                    print('It looks like you\'re training your model on a CPU. '
-                          'Consider switching to a GPU; otherwise, this method '
-                          'can take hours upon hours or even days to finish. '
-                          'For more information, see https://detecto.readthedocs.io/'
-                          'en/latest/usage/quickstart.html#technical-requirements')
-
-                # Convert dataset to data loader if not already
-                if not isinstance(dataset, DataLoader):
-                    dataset = DataLoader(dataset, shuffle=True)
-
-                if val_dataset is not None and not isinstance(val_dataset, DataLoader):
-                    val_dataset = DataLoader(val_dataset)
-
-                data = []
-                losses = []
-                # Get parameters that have grad turned on (i.e. parameters that should be trained)
-                parameters = [par for par in self._model.parameters() if par.requires_grad]
-                # Create an optimizer that uses SGD (stochastic gradient descent) to train the parameters
-                optimizer = torch.optim.SGD(parameters, lr=learning_rate, momentum=momentum,
-                                            weight_decay=weight_decay)
-                # Create a learning rate scheduler that decreases learning rate by gamma every lr_step_size epochs
-                lr_scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=lr_step_size, gamma=gamma)
-
-                # Train on the entire dataset for the specified number of times (epochs)
-                for epoch in range(epochs):
-                    if self.thread_active is False:
-                        break
-
-                    # status emit deep learning process
-                    self.status.emit(f"Deep Learning in process")
-
-                    if verbose:
-                        print('Epoch {} of {}'.format(epoch + 1, epochs))
-
-                    # Training step
-                    self._model.train()
-
-                    if verbose:
-                        print('Begin iterating over training dataset')
-
-                    iterable = tqdm(
-                        dataset,
-                        position=0,
-                        leave=True,
-                        bar_format="{desc:<4}{bar:30}{percentage:3.0f}% {r_bar}") if verbose else dataset
-
-                    for images, targets in iterable:
-                        if self.thread_active is False:
-                            break
-                        self.convert_to_int_labels(targets)
-                        images, targets = self.to_device(images, targets)
-
-                        # Calculate the model's loss (i.e. how well it does on the current
-                        # image and target, with a lower loss being better)
-                        loss_dict = self._model(images, targets)
-                        total_loss = sum(loss for loss in loss_dict.values())
-
-                        # Zero any old/existing gradients on the model's parameters
-                        optimizer.zero_grad()
-                        # Compute gradients for each parameter based on the current loss calculation
-                        total_loss.backward()
-                        # Update model parameters from gradients: param -= learning_rate * param.grad
-                        optimizer.step()
-                        self.status.emit(f"Iterating over training set: {iterable}")
-
-                    # Validation step
-                    if val_dataset is not None:
-                        avg_loss = 0
-                        with torch.no_grad():
-                            if verbose:
-                                print('Begin iterating over validation dataset')
-
-                            iterable = tqdm(
-                                val_dataset,
-                                position=0,
-                                leave=True,
-                                bar_format="{desc:<4}{bar:30}{percentage:3.0f}% {r_bar}") if verbose else val_dataset
-                            for images, targets in iterable:
-                                if self.thread_active is False:
-                                    break
-                                self.convert_to_int_labels(targets)
-                                images, targets = self.to_device(images, targets)
-                                loss_dict = self._model(images, targets)
-                                total_loss = sum(loss for loss in loss_dict.values())
-                                avg_loss += total_loss.item()
-                                self.status.emit(f"Iterating over validation set: {iterable}")
-
-                        if avg_loss != 0:
-                            avg_loss /= len(val_dataset.dataset)
-                        losses.append(avg_loss)
-
-                        if verbose:
-                            print('Loss: {}'.format(avg_loss))
-
-                        if self.thread_active is True:
-                            self.learn.emit(
-                                f"Epoch: {epoch + 1:003d}/{epochs:003d}\tLoss: {avg_loss:0005.4f}")
-                            # self.learn.emit(f"{dashed}")
-                            data.append((epoch + 1, avg_loss))
-                            self.learn_graph.emit(data)
-
-                    # Update the learning rate every few epochs
-                    lr_scheduler.step()
-
-                if len(losses) > 0:
-                    return losses
-
+            self.learn.emit("\n")
+            self.learn.emit("=" * 30)
+            self.learn.emit("\n")
+            self.learn.emit(str(self.eval))
+            self.learn.emit("=" * 30)
+            self.learn.emit("\n")
+            self.learn.emit("Deep Learning in process")
+            self.learn.emit("=" * 30)
             # self.learn.emit(f"{dashed}")
 
-            fit(
+            self.fit(
                 dataset=loader,
                 val_dataset=test_dataset,
                 epochs=self.epochs,
@@ -289,8 +289,8 @@ class WorkerRCNN(qtc.QThread):
                 # self.learn.emit(f"{equals}")
                 self.learn.emit("")
 
-                self.learn.emit(f"Deep Learning process has been finished")
-                self.status.emit(f"Deep Learning process has been finished")
+                self.learn.emit("Deep Learning process has been finished")
+                self.status.emit("Deep Learning process has been finished")
             else:
                 self.status_interrupt()
 

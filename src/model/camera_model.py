@@ -5,8 +5,6 @@ from src.external import qtc, qtg
 from ximea import xiapi
 from sfps import SFPS
 import cv2
-import torch
-from detecto import core
 
 class CameraModel(qtc.QThread):
     update = qtc.pyqtSignal(qtg.QImage, name="camera-signal")
@@ -29,6 +27,7 @@ class CameraModel(qtc.QThread):
         self.model =  None
         self.cam = None
         self.img = None
+        self.device = None
 
     def set_is_model(self, is_model: bool):
         self.__is_model = is_model
@@ -64,19 +63,24 @@ class CameraModel(qtc.QThread):
                             (int(box[0]) + 15, int(box[1] + 25)),
                             cv2.FONT_HERSHEY_PLAIN, 1.5, (0, 255, 150), 1)
 
-    def __config_camera(self):
-        # Ensure GPU is available
-        self.device = "cuda" if torch.cuda.is_available() else "cpu"
-        if self.device == "cuda":
-            torch.cuda.empty_cache()
 
+    def eag_auto_maunal(self):
+        if self.__auto is False:
+            self.cam.enable_aeag()
+        else:
+            self.cam.set_gain(self.__gain)
+            self.cam.set_exposure(self.__exposure)
+
+    def __config_camera(self):
         if not isinstance(self.mutex, qtc.QMutex):
             self.mutex = qtc.QMutex()
+
         if not isinstance(self.__sfps, SFPS):
             self.__sfps = SFPS(nframes=5, interval=1)
+
         if not isinstance(self.cam, xiapi.Camera):
             self.cam = xiapi.Camera()
-        self.mutex.lock()
+
         self.status.emit("Communication ...")
         self.cam.open_device_by_SN("UBFAS2438006")
         self.status.emit("Device Opened")
@@ -84,23 +88,22 @@ class CameraModel(qtc.QThread):
         self.cam.enable_auto_bandwidth_calculation()
         self.cam.set_debug_level("XI_DL_FATAL")
         # self.cam.set_acq_buffer_size(1500000000)
+
         self.cam.enable_auto_wb()
         self.cam.set_buffer_policy("XI_BP_UNSAFE")
         self.cam.set_imgdataformat("XI_RGB24")
         # self.cam.set_transport_data_target("XI_TRANSPORT_DATA_TARGET_UNIFIED")
-        if self.__auto is False:
-            self.cam.enable_aeag()
-        else:
-            self.cam.set_gain(self.__gain)
-            self.cam.set_exposure(self.__exposure)
+
+        self.eag_auto_maunal()
+
         self.status.emit("Creating Instance of Image to Store Image Data and Metadata ...")
+
         if not isinstance(self.img, xiapi.Image):
             self.img = xiapi.Image()
         self.status.emit("Created Instance")
         self.status.emit('Starting Data Acquisition...')
         self.cam.start_acquisition()
         self.status.emit('Started Data Acquisition')
-        self.mutex.unlock()
 
     def show_fps(self, img):
         fps = self.__sfps.fps(format_spec='.1f')
@@ -131,38 +134,55 @@ class CameraModel(qtc.QThread):
         self.check_conn.emit(False)
         self.mutex.unlock()
 
+    def detector(self):
+        if self.__is_model and self.__model is not None and self.__annot is not None:
+            import torch
+            from detecto import core
+            # Ensure GPU is available
+            self.device = "cuda" if torch.cuda.is_available() else "cpu"
+            if self.device == "cuda":
+                torch.cuda.empty_cache()
+            self.model = core.Model.load(self.__model, self.__annot)
+
+    def detection(self, img):
+        if self.__is_model and self.__model is not None and self.__annot is not None:
+            self.detector_objects(model=self.model, frame=img)
+
+    def convert_frame(self, img):
+        convert = qtg.QImage(
+            img.data,
+            img.shape[1],
+            img.shape[0],
+            qtg.QImage.Format.Format_RGB888
+        )
+
+        pic = convert.scaled(self.__size, Const.KEEP_ASPECT_RATION_BY_EXPANDING, Const.FAST_TRANSFORMATION)
+        self.update.emit(pic)
+
     def run(self):
         try:
             self.thread = True
             self.__config_camera()
-            if self.__is_model and self.__model is not None and self.__annot is not None:
-                self.model = core.Model.load(self.__model, self.__annot)
+
             while self.thread:
                 self.mutex.lock()
                 if self.cam.is_isexist():
                     self.check_conn.emit(True)
-                    if self.__auto is False:
-                        self.cam.enable_aeag()
-                    else:
-                        self.cam.set_gain(self.__gain)
-                        self.cam.set_exposure(self.__exposure)
+
+                    self.detector()
+
                     self.cam.get_image(self.img)
                     img = self.img.get_image_data_numpy(True)
                     img = cv2.resize(img, (800, 600))
 
                     self.show_fps(img)
-                    if self.__is_model and self.__model is not None and self.__annot is not None:
-                        self.detector_objects(model=self.model, frame=img)
 
-                    convert = qtg.QImage(
-                        img.data,
-                        img.shape[1],
-                        img.shape[0],
-                        qtg.QImage.Format.Format_RGB888
-                    )
+                    self.detection(img=img)
 
-                    pic = convert.scaled(self.__size, Const.KEEP_ASPECT_RATION_BY_EXPANDING, Const.FAST_TRANSFORMATION)
-                    self.update.emit(pic)
+                    self.eag_auto_maunal()
+
+                    self.convert_frame(img=img)
+
                     self.status.emit("Camera Streaming ...")
                     time.sleep(self.__exposure / Const.WAIT_EXPOSURE)
                 else:

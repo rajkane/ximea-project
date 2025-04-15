@@ -15,7 +15,6 @@ class LearningWindow(qtw.QMainWindow, Ui_LearningWindow):
 
     def __init_buttons(self):
         self.btn_start.clicked.connect(self.__start_learning)
-        # self.btn_augmentation.clicked.connect(self.open_augmentation_window)
         self.btn_stop.clicked.connect(self.__stop_learning)
         self.btn_clear.clicked.connect(self.__clear_graph)
         self.tbtn_dataset.clicked.connect(self.__path_directory)
