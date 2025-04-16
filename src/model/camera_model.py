@@ -87,14 +87,17 @@ class CameraModel(qtc.QThread):
         self.cam.set_proc_num_threads(8)
         self.cam.enable_auto_bandwidth_calculation()
         self.cam.set_debug_level("XI_DL_FATAL")
-        # self.cam.set_acq_buffer_size(1500000000)
 
+        """self.cam.enable_apply_cms()
+        self.cam.set_cms("XI_CMS_EN_FAST")  # XI_CMS_EN"""
         self.cam.enable_auto_wb()
-        self.cam.set_buffer_policy("XI_BP_UNSAFE")
-        self.cam.set_imgdataformat("XI_RGB24")
-        # self.cam.set_transport_data_target("XI_TRANSPORT_DATA_TARGET_UNIFIED")
-
+        self.cam.set_exp_priority(.5)
         self.eag_auto_maunal()
+
+        self.cam.set_buffer_policy("XI_BP_UNSAFE")
+        self.cam.set_imgdataformat("XI_RGB24")  # XI_FRM_TRANSPORT_DATA
+        # self.cam.set_transport_data_target("XI_TRANSPORT_DATA_TARGET_UNIFIED")
+        self.cam.set_acq_buffer_size(1000000000)
 
         self.status.emit("Creating Instance of Image to Store Image Data and Metadata ...")
 
@@ -165,11 +168,12 @@ class CameraModel(qtc.QThread):
             self.__config_camera()
 
             while self.thread:
-                self.mutex.lock()
+                # self.mutex.lock()
                 if self.cam.is_isexist():
                     self.check_conn.emit(True)
 
                     self.detector()
+                    self.eag_auto_maunal()
 
                     self.cam.get_image(self.img)
                     img = self.img.get_image_data_numpy(True)
@@ -179,15 +183,13 @@ class CameraModel(qtc.QThread):
 
                     self.detection(img=img)
 
-                    self.eag_auto_maunal()
-
                     self.convert_frame(img=img)
 
                     self.status.emit("Camera Streaming ...")
                     time.sleep(self.__exposure / Const.WAIT_EXPOSURE)
                 else:
                     break
-                self.mutex.unlock()
+                # self.mutex.unlock()
 
             self.__close_cam()
 
