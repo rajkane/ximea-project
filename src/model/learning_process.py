@@ -13,11 +13,11 @@ class WorkerRCNN(qtc.QThread):
     """
     deep learning process
     """
-    learn = qtc.pyqtSignal(str, name="deep-learning-process")
+    learn = qtc.pyqtSignal(str)
     learn_graph = qtc.pyqtSignal(list)
-    status = qtc.pyqtSignal(str, name="bar-status")
-    exception = qtc.pyqtSignal(str, name="exception")
-    enabled_learning_process = qtc.pyqtSignal(bool, name="enabled/disabled-GUI-objects")
+    status = qtc.pyqtSignal(str)
+    exception = qtc.pyqtSignal(str)
+    enabled_learning_process = qtc.pyqtSignal(bool)
 
     def __init__(self, dataset_name: str, batch_size: int, annotation: list, epochs: int,
                  lr_step_size: int, learning_rate: float, model_name: str):
@@ -40,7 +40,6 @@ class WorkerRCNN(qtc.QThread):
         self.custom_transforms = None
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         if self.device == "cuda":
-            torch.amp.autocast('cuda')
             torch.cuda.empty_cache()
 
         self._model = torchvision.models.detection.fasterrcnn_resnet50_fpn(pretrained=True)

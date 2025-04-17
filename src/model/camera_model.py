@@ -7,10 +7,12 @@ from sfps import SFPS
 import cv2
 
 class CameraModel(qtc.QThread):
-    update = qtc.pyqtSignal(qtg.QImage, name="camera-signal")
-    status = qtc.pyqtSignal(str, name="status-signal")
-    exception = qtc.pyqtSignal(str, name="exception-signal")
-    check_conn = qtc.pyqtSignal(bool, name="check-conn-signal")
+    """gain = qtc.pyqtSignal(int)
+    exposure = qtc.pyqtSignal(int)"""
+    update = qtc.pyqtSignal(qtg.QImage)
+    status = qtc.pyqtSignal(str)
+    exception = qtc.pyqtSignal(str)
+    check_conn = qtc.pyqtSignal(bool)
 
     def __init__(self, model :str = None, annot :list = None):
         super(CameraModel, self).__init__()
@@ -90,9 +92,10 @@ class CameraModel(qtc.QThread):
 
         """self.cam.enable_apply_cms()
         self.cam.set_cms("XI_CMS_EN_FAST")  # XI_CMS_EN"""
-        self.cam.enable_auto_wb()
+
         self.cam.set_exp_priority(.5)
         self.eag_auto_maunal()
+        self.cam.enable_auto_wb()
 
         self.cam.set_buffer_policy("XI_BP_UNSAFE")
         self.cam.set_imgdataformat("XI_RGB24")  # XI_FRM_TRANSPORT_DATA
@@ -100,7 +103,6 @@ class CameraModel(qtc.QThread):
         self.cam.set_acq_buffer_size(1000000000)
 
         self.status.emit("Creating Instance of Image to Store Image Data and Metadata ...")
-
         if not isinstance(self.img, xiapi.Image):
             self.img = xiapi.Image()
         self.status.emit("Created Instance")
@@ -166,16 +168,20 @@ class CameraModel(qtc.QThread):
         try:
             self.thread = True
             self.__config_camera()
-
             while self.thread:
-                # self.mutex.lock()
                 if self.cam.is_isexist():
+                    self.mutex.lock()
                     self.check_conn.emit(True)
 
                     self.detector()
-                    self.eag_auto_maunal()
 
                     self.cam.get_image(self.img)
+                    self.cam.set_exp_priority(.5)
+                    self.eag_auto_maunal()
+
+                    """ self.gain.emit(int(self.cam.get_gain()))
+                     self.exposure.emit(int(self.cam.get_exposure()))"""
+
                     img = self.img.get_image_data_numpy(True)
                     img = cv2.resize(img, (800, 600))
 
@@ -187,9 +193,9 @@ class CameraModel(qtc.QThread):
 
                     self.status.emit("Camera Streaming ...")
                     time.sleep(self.__exposure / Const.WAIT_EXPOSURE)
+                    self.mutex.unlock()
                 else:
                     break
-                # self.mutex.unlock()
 
             self.__close_cam()
 

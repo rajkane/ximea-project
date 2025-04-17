@@ -77,25 +77,55 @@ class LearningWindow(qtw.QMainWindow, Ui_LearningWindow):
             self.__message_exception("Check input data!")
 
     def __stop_learning(self):
-        self.learning_worker.enabled_learning_process.connect(self.__action_running_process)
-        self.learning_worker.stop()
+        if isinstance(self.learning_worker, WorkerRCNN):
+            if self.learning_worker.isRunning():
+                self.learning_worker.enabled_learning_process.connect(self.__action_running_process)
+                self.learning_worker.stop()
 
     def __clear_graph(self):
         return self.graphicsView.clear()
 
-    @qtc.pyqtSlot(bool, name="enabled/disabled-GUI-objects")
+    @qtc.pyqtSlot(bool)
     def __action_running_process(self, val):
-        if val is True:
-            if self.learning_worker.isRunning():
-                self.btn_start.setEnabled(False)
-                self.btn_stop.setEnabled(True)
-                self.btn_clear.setEnabled(False)
+        if val:
+            self.btn_start.setEnabled(False)
+            self.btn_stop.setEnabled(True)
+            self.btn_clear.setEnabled(False)
+            self.tbtn_dataset.setEnabled(False)
+            self.sb_batch_size.setEnabled(False)
+            self.le_annotation.setEnabled(False)
+            self.sb_epoch.setEnabled(False)
+            self.sb_lr_step_size.setEnabled(False)
+            self.dsb_lr_rate.setEnabled(False)
+            self.sb_resize.setEnabled(False)
+            self.dsb_hor_flip.setEnabled(False)
+            self.dsb_vert_flip.setEnabled(False)
+            self.dsb_auto_contr.setEnabled(False)
+            self.dsb_equalize.setEnabled(False)
+            self.sb_rotation.setEnabled(False)
+            self.le_model_name.setEnabled(False)
+            self.graphicsView.setEnabled(False)
         else:
             self.btn_start.setEnabled(True)
             self.btn_stop.setEnabled(False)
             self.btn_clear.setEnabled(True)
+            self.tbtn_dataset.setEnabled(True)
+            self.tbtn_dataset.setEnabled(True)
+            self.sb_batch_size.setEnabled(True)
+            self.le_annotation.setEnabled(True)
+            self.sb_epoch.setEnabled(True)
+            self.sb_lr_step_size.setEnabled(True)
+            self.dsb_lr_rate.setEnabled(True)
+            self.sb_resize.setEnabled(True)
+            self.dsb_hor_flip.setEnabled(True)
+            self.dsb_vert_flip.setEnabled(True)
+            self.dsb_auto_contr.setEnabled(True)
+            self.dsb_equalize.setEnabled(True)
+            self.sb_rotation.setEnabled(True)
+            self.le_model_name.setEnabled(True)
+            self.graphicsView.setEnabled(True)
 
-    @qtc.pyqtSlot(str, name="deep-learning-process")
+    @qtc.pyqtSlot(str)
     def __update_deep_learning(self, val):
         self.pte_report.verticalScrollBar().setValue(self.pte_report.verticalScrollBar().maximum())
         return self.pte_report.appendPlainText(str(val))

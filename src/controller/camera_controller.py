@@ -138,6 +138,9 @@ class MainWindow(qtw.QMainWindow, Ui_MainWindow):
                 del self.cam_process
                 gc.collect()
                 self.cam_process = None
+        self.chb_manual.setChecked(False)
+        self.dial_gain.setEnabled(False)
+        self.dial_exposure.setEnabled(False)
 
     def __open_snapshots_window(self):
         self.__stop_camera()
