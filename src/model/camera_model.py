@@ -1,48 +1,109 @@
 import gc
 import time
-from src.model.constants import Const
-from src.external import qtc, qtg
-from ximea import xiapi
-from sfps import SFPS
+
 import cv2
+from sfps import SFPS
+from ximea import xiapi
+
+from src.external import qtc, qtg
+from src.model.constants import Const
+
 
 class CameraModel(qtc.QThread):
-    """gain = qtc.pyqtSignal(int)
-    exposure = qtc.pyqtSignal(int)"""
+    """Camera streaming thread.
+
+    Primary backend: Ximea (xiapi)
+    Fallback backend: OpenCV VideoCapture (USB / laptop webcam)
+    """
+
     update = qtc.pyqtSignal(qtg.QImage)
     status = qtc.pyqtSignal(str)
     exception = qtc.pyqtSignal(str)
     check_conn = qtc.pyqtSignal(bool)
 
-    def __init__(self, model :str = None, annot :list = None):
+    def __init__(self, model: str | None = None, annot: list | None = None):
         super(CameraModel, self).__init__()
-        self.mutex = None
-        self.thread = False
-        self.__is_model = None
-        self.__auto = None
-        self.__gain = None
-        self.__exposure = None
-        self.__model = model
-        self.__annot = annot
+
+        # threading
+        self.mutex: qtc.QMutex | None = None
+        self.thread: bool = False
+
+        # model / detection
+        self.__is_model: bool | None = None
+        self.__model: str | None = model
+        self.__annot: list | None = annot
+        self.model = None
+        self.device: str | None = None
+        self._detector_ready: bool = False
+
+        # camera settings
+        self.__auto: bool | None = None
+        self.__gain: float | None = None
+        self.__exposure: int | None = None
         self.__size = Const.SIZE
-        self.__sfps = None
-        self.model =  None
+
+        # fps
+        self.__sfps: SFPS | None = None
+
+        # camera backends
         self.cam = None
         self.img = None
-        self.device = None
-        self._detector_ready = False
-        # camera backend: 'ximea' or 'opencv'
-        self._camera_backend = None
+        self._camera_backend: str | None = None  # 'ximea' or 'opencv'
         self._cv_cap = None
 
     # -----------------
-    # Model / detector
+    # Public setters (used by GUI + tests)
+    # -----------------
+    def set_is_model(self, is_model: bool):
+        self.__is_model = is_model
+        self._detector_ready = False
+
+    def set_model(self, model: str):
+        self.__model = model
+        self._detector_ready = False
+
+    def set_annot(self, annot: list):
+        self.__annot = annot
+        self._detector_ready = False
+
+    def set_auto_gain_exposure(self, auto: bool):
+        self.__auto = auto
+
+    def set_gain_camera(self, gain: float):
+        self.__gain = gain
+
+    def set_exposure_camera(self, exposure: int):
+        self.__exposure = exposure
+
+    def set_scale_camera(self, scale: float):
+        self.__size = qtc.QSize(int(Const.WIDTH * scale), int(Const.HEIGHT * scale))
+
+    # -----------------
+    # Ximea AEAG helpers
+    # -----------------
+    def eag_auto_maunal(self):
+        """Apply auto-exposure/gain or manual settings for Ximea backend."""
+        # In the original code, `__auto` False meant automatic AEAG.
+        if self.__auto is False:
+            try:
+                self.cam.enable_aeag()
+            except Exception:
+                pass
+            return
+
+        try:
+            if self.__gain is not None:
+                self.cam.set_gain(self.__gain)
+            if self.__exposure is not None:
+                self.cam.set_exposure(self.__exposure)
+        except Exception:
+            pass
+
+    # -----------------
+    # Detector
     # -----------------
     def detector(self):
-        """Load detector model once (idempotent).
-
-        Tests rely on this method existing and being called exactly once per run.
-        """
+        """Load detector model once (idempotent)."""
         if self._detector_ready:
             return
         if not (self.__is_model and self.__model is not None and self.__annot is not None):
@@ -54,7 +115,7 @@ class CameraModel(qtc.QThread):
 
         resolved = os.getenv("INFERENCE_BACKEND_RESOLVED", "").strip().lower()
 
-        # If user selected ONNX, try it first (CPU only). If anything fails, fall back to Detecto.
+        # Optional ONNX
         if resolved == "onnx-cpu":
             try:
                 onnx_path = os.path.splitext(self.__model)[0] + ".onnx"
@@ -68,6 +129,7 @@ class CameraModel(qtc.QThread):
             except Exception:
                 pass
 
+        # Torch
         if resolved == "torch-cpu":
             self.device = "cpu"
         else:
@@ -79,14 +141,38 @@ class CameraModel(qtc.QThread):
         self.model = core.Model.load(self.__model, self.__annot)
         self._detector_ready = True
 
+    @staticmethod
+    def detector_objects(model, frame):
+        """Draw detections on the frame (expects Detecto-like predict output)."""
+        labels, boxes, scores = model.predict(frame)
+        for i in range(boxes.shape[0]):
+            box = boxes[i]
+            if scores[i] > .80:
+                cv2.rectangle(frame, (int(box[0]), int(box[1])), (int(box[2]), int(box[3])), (0, 255, 150), 2)
+                cv2.rectangle(frame, (int(box[0]), int(box[1])),
+                              (int(box[0]) + 200, int(box[1]) + 35), (0, 0, 0), -1)
+                cv2.putText(frame, f"{labels[i]}: {int(scores[i] * 100)}%",
+                            (int(box[0]) + 15, int(box[1] + 25)),
+                            cv2.FONT_HERSHEY_PLAIN, 1.5, (0, 255, 150), 1)
+
     # -----------------
-    # Camera config helpers (reduce complexity)
+    # Camera configuration
     # -----------------
     def _ensure_thread_primitives(self):
         if not isinstance(self.mutex, qtc.QMutex):
             self.mutex = qtc.QMutex()
         if not isinstance(self.__sfps, SFPS):
             self.__sfps = SFPS(nframes=5, interval=1)
+
+    @staticmethod
+    def _parse_int_env(name: str, default: int) -> int:
+        import os
+
+        val = os.getenv(name, str(default)).strip()
+        try:
+            return int(val)
+        except Exception:
+            return default
 
     def _try_setup_ximea(self) -> bool:
         try:
@@ -120,16 +206,6 @@ class CameraModel(qtc.QThread):
             return True
         except Exception:
             return False
-
-    @staticmethod
-    def _parse_int_env(name: str, default: int) -> int:
-        import os
-
-        val = os.getenv(name, str(default)).strip()
-        try:
-            return int(val)
-        except Exception:
-            return default
 
     def _open_opencv_camera(self, index: int):
         cap = cv2.VideoCapture(index)
@@ -174,25 +250,83 @@ class CameraModel(qtc.QThread):
         raise RuntimeError(f"Failed to open any OpenCV camera. Tried indices: {tried}")
 
     def __config_camera(self):
-        """Configure camera.
-
-        Primary: Ximea (xiapi)
-        Fallback: OpenCV VideoCapture (USB / laptop webcam)
-
-        You can control OpenCV fallback via env vars:
-        - OPENCV_CAMERA_INDEX: preferred index (default 0)
-        - OPENCV_CAMERA_MAX_INDEX: max index to try when preferred fails (default 3)
-        """
+        """Configure camera (Ximea -> OpenCV fallback)."""
         self._ensure_thread_primitives()
-
         if self._try_setup_ximea():
             return
-
         self._camera_backend = None
         self._setup_opencv_fallback()
 
     # -----------------
-    # Run loop helpers
+    # Streaming pipeline
+    # -----------------
+    def show_fps(self, img):
+        fps = self.__sfps.fps(format_spec='.1f')
+        cv2.rectangle(img, Const.START_POINT_BG_FPS, Const.END_POINT_BG_FPS, Const.RECT_COLOR_BG, Const.THICKNEES_RECTANGLE)
+        cv2.putText(
+            img,
+            text=f"FPS: {fps}",
+            org=Const.ORG_TEXT_FPS,
+            fontFace=cv2.FONT_HERSHEY_SIMPLEX,
+            fontScale=Const.FONT_SCALE_FPS,
+            color=Const.RECT_COLOR_TEXT_FPS,
+            thickness=Const.THICKNEES,
+            lineType=cv2.LINE_AA
+        )
+
+    def _grab_frame(self):
+        """Return an RGB numpy frame."""
+        if self._camera_backend == 'opencv':
+            ok, frame_bgr = self._cv_cap.read()
+            if not ok or frame_bgr is None:
+                raise RuntimeError('OpenCV camera read failed')
+            return cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
+
+        self.cam.get_image(self.img)
+        self.cam.set_exp_priority(.5)
+        self.eag_auto_maunal()
+        return self.img.get_image_data_numpy(True)
+
+    def detection(self, img):
+        if self.__is_model and self.__model is not None and self.__annot is not None:
+            self.detector_objects(model=self.model, frame=img)
+
+    def convert_frame(self, img):
+        convert = qtg.QImage(
+            img.data,
+            img.shape[1],
+            img.shape[0],
+            qtg.QImage.Format.Format_RGB888
+        )
+        pic = convert.scaled(self.__size, Const.KEEP_ASPECT_RATION_BY_EXPANDING, Const.FAST_TRANSFORMATION)
+        self.update.emit(pic)
+
+    def _sleep_seconds(self) -> float:
+        try:
+            if self.__exposure is None or not Const.WAIT_EXPOSURE:
+                return 0.0
+            return float(self.__exposure) / float(Const.WAIT_EXPOSURE)
+        except Exception:
+            return 0.0
+
+    def _process_one_frame(self):
+        self.check_conn.emit(True)
+
+        img = self._grab_frame()
+        img = cv2.resize(img, (800, 600))
+
+        self.show_fps(img)
+        self.detection(img=img)
+        self.convert_frame(img=img)
+
+        self.status.emit("Camera Streaming ...")
+
+        sleep_s = self._sleep_seconds()
+        if sleep_s > 0:
+            time.sleep(sleep_s)
+
+    # -----------------
+    # Thread lifecycle
     # -----------------
     def _with_mutex(self, fn):
         self.mutex.lock()
@@ -209,20 +343,6 @@ class CameraModel(qtc.QThread):
         except Exception:
             return False
 
-    def show_fps(self, img):
-        fps = self.__sfps.fps(format_spec='.1f')
-        cv2.rectangle(img, Const.START_POINT_BG_FPS, Const.END_POINT_BG_FPS, Const.RECT_COLOR_BG, Const.THICKNEES_RECTANGLE)
-        cv2.putText(
-            img,
-            text=f"FPS: {fps}",
-            org=Const.ORG_TEXT_FPS,
-            fontFace=cv2.FONT_HERSHEY_SIMPLEX,
-            fontScale=Const.FONT_SCALE_FPS,
-            color=Const.RECT_COLOR_TEXT_FPS,
-            thickness=Const.THICKNEES,
-            lineType=cv2.LINE_AA
-        )
-
     def _close_opencv(self):
         if self._camera_backend != 'opencv' or self._cv_cap is None:
             return
@@ -237,7 +357,6 @@ class CameraModel(qtc.QThread):
             return
 
         self.status.emit("Stopping Acquisition ...")
-
         try:
             self.cam.set_counter_selector("XI_CNT_SEL_TRANSPORT_SKIPPED_FRAMES")
             self.cam.get_counter_value()
@@ -271,64 +390,6 @@ class CameraModel(qtc.QThread):
         finally:
             if self.mutex is not None:
                 self.mutex.unlock()
-
-    def _grab_frame(self):
-        """Return an RGB numpy frame."""
-        if self._camera_backend == 'opencv':
-            ok, frame_bgr = self._cv_cap.read()
-            if not ok or frame_bgr is None:
-                raise RuntimeError('OpenCV camera read failed')
-            # BGR -> RGB
-            return cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
-
-        # default: ximea
-        self.cam.get_image(self.img)
-        self.cam.set_exp_priority(.5)
-        self.eag_auto_maunal()
-        return self.img.get_image_data_numpy(True)
-
-    def detection(self, img):
-        if self.__is_model and self.__model is not None and self.__annot is not None:
-            self.detector_objects(model=self.model, frame=img)
-
-    def convert_frame(self, img):
-        convert = qtg.QImage(
-            img.data,
-            img.shape[1],
-            img.shape[0],
-            qtg.QImage.Format.Format_RGB888
-        )
-
-        pic = convert.scaled(self.__size, Const.KEEP_ASPECT_RATION_BY_EXPANDING, Const.FAST_TRANSFORMATION)
-        self.update.emit(pic)
-
-    def _sleep_seconds(self) -> float:
-        """Compute safe sleep duration for the streaming loop."""
-        try:
-            if self.__exposure is None or not Const.WAIT_EXPOSURE:
-                return 0.0
-            return float(self.__exposure) / float(Const.WAIT_EXPOSURE)
-        except Exception:
-            return 0.0
-
-    def _process_one_frame(self):
-        """Grab one frame, apply processing, emit UI updates."""
-        self.check_conn.emit(True)
-
-        img = self._grab_frame()
-
-        # unify size
-        img = cv2.resize(img, (800, 600))
-
-        self.show_fps(img)
-        self.detection(img=img)
-        self.convert_frame(img=img)
-
-        self.status.emit("Camera Streaming ...")
-
-        sleep_s = self._sleep_seconds()
-        if sleep_s > 0:
-            time.sleep(sleep_s)
 
     def run(self):
         try:
@@ -371,58 +432,3 @@ class CameraModel(qtc.QThread):
             self.quit()
             self.wait()
 
-    @staticmethod
-    def detector_objects(model, frame):
-        """Draw detections on the frame (expects Detecto-like predict output)."""
-        labels, boxes, scores = model.predict(frame)
-        for i in range(boxes.shape[0]):
-            box = boxes[i]
-            if scores[i] > .80:
-                cv2.rectangle(frame, (int(box[0]), int(box[1])), (int(box[2]), int(box[3])), (0, 255, 150), 2)
-                cv2.rectangle(frame, (int(box[0]), int(box[1])),
-                              (int(box[0]) + 200, int(box[1]) + 35), (0, 0, 0), -1)
-                cv2.putText(frame, f"{labels[i]}: {int(scores[i] * 100)}%",
-                            (int(box[0]) + 15, int(box[1] + 25)),
-                            cv2.FONT_HERSHEY_PLAIN, 1.5, (0, 255, 150), 1)
-
-    def set_is_model(self, is_model: bool):
-        self.__is_model = is_model
-        # reset detector state when toggling
-        self._detector_ready = False
-
-    def set_auto_gain_exposure(self, auto: bool):
-        self.__auto = auto
-
-    def set_model(self, model: str):
-        self.__model = model
-        self._detector_ready = False
-
-    def set_annot(self, annot: list):
-        self.__annot = annot
-        self._detector_ready = False
-
-    def set_gain_camera(self, gain: float):
-        self.__gain = gain
-
-    def set_exposure_camera(self, exposure: int):
-        self.__exposure = exposure
-
-    def set_scale_camera(self, scale: float):
-        self.__size = qtc.QSize(int(Const.WIDTH * scale), int(Const.HEIGHT * scale))
-
-    def eag_auto_maunal(self):
-        """Apply auto-exposure/gain or manual settings for Ximea backend."""
-        # In the original code, `__auto` False meant automatic AEAG.
-        if self.__auto is False:
-            try:
-                self.cam.enable_aeag()
-            except Exception:
-                pass
-        else:
-            try:
-                if self.__gain is not None:
-                    self.cam.set_gain(self.__gain)
-                if self.__exposure is not None:
-                    self.cam.set_exposure(self.__exposure)
-            except Exception:
-                pass
