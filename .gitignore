@@ -388,6 +388,12 @@ cython_debug/
 
 # Android studio 3.1+ serialized cache file
 
-./Dataset
-./Models
-./Reports
+# JetBrains IDE folder (recommended to keep out of VCS)
+.idea/
+
+# Keep Dataset/ and Models/ directories, but ignore their contents
+Dataset/**
+!Dataset/.gitkeep
+
+Models/**
+!Models/.gitkeep
