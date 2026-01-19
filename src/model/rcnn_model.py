@@ -9,6 +9,37 @@ from detecto.utils import default_transforms, filter_top_predictions, xml_to_csv
 from torchvision import transforms
 from torchvision.models.detection.faster_rcnn import FastRCNNPredictor
 from tqdm import tqdm
+import xml.etree.ElementTree as ET
+
+
+def extract_labels_from_xml_folder(folder_path):
+    """Scan a folder for Pascal VOC style .xml annotation files and return
+    a set of label names found in the <object>/<name> tags.
+
+    :param folder_path: directory that contains .xml files (or subfolders)
+    :type folder_path: str
+    :return: set of label strings
+    :rtype: set
+    """
+    labels = set()
+    if not os.path.isdir(folder_path):
+        return labels
+    for root_dir, dirs, files in os.walk(folder_path):
+        for fname in files:
+            if not fname.lower().endswith('.xml'):
+                continue
+            fpath = os.path.join(root_dir, fname)
+            try:
+                tree = ET.parse(fpath)
+                root = tree.getroot()
+                for obj in root.findall('object'):
+                    name_tag = obj.find('name')
+                    if name_tag is not None and name_tag.text:
+                        labels.add(name_tag.text.strip())
+            except ET.ParseError:
+                # skip malformed xml but continue scanning
+                continue
+    return labels
 
 
 class DataLoader(torch.utils.data.DataLoader):
@@ -18,7 +49,7 @@ class DataLoader(torch.utils.data.DataLoader):
         an iterable over the data, which can then be fed into a
         :class:`detecto.core.Model` for training and validation.
         Extends PyTorch's `DataLoader
-        <https://pytorch.org/docs/stable/data.html>`_ class with a custom
+        <https://pytorch.org/docs/stable/data.html#torch.utils.data.DataLoader>`_ class with a custom
         ``collate_fn`` function.
 
         :param dataset: The dataset for iteration over.

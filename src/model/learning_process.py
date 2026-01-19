@@ -1,12 +1,15 @@
 import os
 import torchvision
 import torch
+import logging
 from src.external import qtc
 from detecto import utils
 from torchvision import transforms
 from torchvision.models.detection.faster_rcnn import FastRCNNPredictor
-from .rcnn_model import Dataset, DataLoader
+from .rcnn_model import Dataset, DataLoader, extract_labels_from_xml_folder
 from tqdm import tqdm
+
+logger = logging.getLogger(__name__)
 
 
 class WorkerRCNN(qtc.QThread):
@@ -25,7 +28,16 @@ class WorkerRCNN(qtc.QThread):
         self.thread_active = False
         self.dataset_name = dataset_name
         self.batch_size = batch_size
-        self.annotation = annotation
+        # Normalize annotation: accept either a list (['A','B']) or a comma-separated
+        # string like "A, B" or 'A, B' and produce a list of label strings.
+        if isinstance(annotation, str):
+            ann_list = [s.strip().strip('"').strip("'") for s in annotation.split(',') if s.strip()]
+            self.annotation = ann_list
+        elif annotation is None:
+            self.annotation = []
+        else:
+            # assume iterable of labels
+            self.annotation = list(annotation)
         self.epochs = epochs
         self.lr_step_size = lr_step_size
         self.learning_rate = learning_rate
@@ -38,11 +50,19 @@ class WorkerRCNN(qtc.QThread):
         self.model_name = model_name
         self.settings = None
         self.custom_transforms = None
-        self.device = "cuda" if torch.cuda.is_available() else "cpu"
-        if self.device == "cuda":
+        # use torch.device for consistency
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        if self.device.type == "cuda":
             torch.cuda.empty_cache()
 
-        self._model = torchvision.models.detection.fasterrcnn_resnet50_fpn(pretrained=True)
+        # Use new weights API when available to avoid deprecation warnings
+        try:
+            from torchvision.models.detection import FasterRCNN_ResNet50_FPN_Weights
+            weights = FasterRCNN_ResNet50_FPN_Weights.DEFAULT
+            self._model = torchvision.models.detection.fasterrcnn_resnet50_fpn(weights=weights)
+        except Exception:
+            # fallback to older API
+            self._model = torchvision.models.detection.fasterrcnn_resnet50_fpn(pretrained=True)
         self.eval = self._model.eval()
         if self.annotation:
             # Get the number of input features for the classifier
@@ -67,9 +87,29 @@ class WorkerRCNN(qtc.QThread):
         for idx, target in enumerate(targets):
             # get all string labels for objects in a single image
             labels_array = target['labels']
-            # convert string labels into one hot encoding
+            # detect labels missing from the mapping
+            missing = sorted({c for c in labels_array if c not in self._int_mapping})
+            if missing:
+                # fail early: dataset contains labels not declared in annotation
+                raise ValueError(f"Dataset contains label(s) not present in annotation: {missing}. Update annotation or dataset.")
+            # convert string labels into integer labels
             labels_int_array = [self._int_mapping[class_name] for class_name in labels_array]
-            target['labels'] = torch.tensor(labels_int_array)
+            target['labels'] = torch.tensor(labels_int_array, dtype=torch.int64)
+
+    def validate_dataset_labels(self, dataloader):
+        """Validate that all labels present in dataloader are listed in self.annotation.
+        Raises ValueError when unknown labels are found.
+        """
+        dataset_labels = set()
+        # dataloader can be an iterable over (images, targets)
+        for _, targets in dataloader:
+            for t in targets:
+                # t['labels'] may be a list of strings (before convert_to_int_labels)
+                labels = t.get('labels', [])
+                dataset_labels.update(labels)
+        missing = sorted(dataset_labels - set(self._classes))
+        if missing:
+            raise ValueError(f"Dataset contains label(s) not present in annotation: {missing}")
 
     # Sends all images and targets to the same device as the model
     def to_device(self, images, targets):
@@ -99,26 +139,32 @@ class WorkerRCNN(qtc.QThread):
         self.rotation = rotation
 
     def get_augment(self):
-        """self.settings = qtc.QSettings("augmentation.ini", qtc.QSettings.format.IniFormat)
-        resize = int(self.settings.value("resize", int))
-        r_horizontal_flip = float(self.settings.value("random-horizontal-flip", float))
-        r_vertical_flip = float(self.settings.value("random-vertical-flip", float))
-        r_auto_contrast = float(self.settings.value("random-auto-contrast", float))
-        r_equalize = float(self.settings.value("random-equalize", float))
-        r_rotation_min = int(self.settings.value("random-rotation-min", int))
-        r_rotation_max = int(self.settings.value("random-rotation-max", int))"""
+        """Build and return the augmentation transforms based on the configured
+        augmentation parameters. Only active transforms (where params are not None)
+        are included; this avoids passing None into torchvision transforms.
+        """
+        # Basic validation / defaults
+        if self.resize is None:
+            raise ValueError("Resize not set. Call set_resize(resize) before get_augment().")
 
-        self.custom_transforms = transforms.Compose([
-            transforms.ToPILImage(),
-            transforms.Resize((self.resize, self.resize)),
-            transforms.RandomHorizontalFlip(p=self.horizontal),
-            transforms.RandomVerticalFlip(p=self.vertical),
-            transforms.RandomAutocontrast(p=self.autocontrast),
-            transforms.RandomEqualize(p=self.equalize),
-            transforms.RandomRotation(degrees=(-1 * self.rotation, self.rotation)),
-            transforms.ToTensor(),
-            utils.normalize_transform(),
-        ])
+        transforms_list = [transforms.ToPILImage(), transforms.Resize((self.resize, self.resize))]
+
+        if isinstance(self.horizontal, (int, float)) and self.horizontal > 0:
+            transforms_list.append(transforms.RandomHorizontalFlip(p=self.horizontal))
+        if isinstance(self.vertical, (int, float)) and self.vertical > 0:
+            transforms_list.append(transforms.RandomVerticalFlip(p=self.vertical))
+        if isinstance(self.autocontrast, (int, float)) and self.autocontrast > 0:
+            transforms_list.append(transforms.RandomAutocontrast(p=self.autocontrast))
+        if isinstance(self.equalize, (int, float)) and self.equalize > 0:
+            transforms_list.append(transforms.RandomEqualize(p=self.equalize))
+        if isinstance(self.rotation, (int, float)) and self.rotation > 0:
+            transforms_list.append(transforms.RandomRotation(degrees=(-1 * self.rotation, self.rotation)))
+
+        transforms_list.append(transforms.ToTensor())
+        transforms_list.append(utils.normalize_transform())
+
+        self.custom_transforms = transforms.Compose(transforms_list)
+        return self.custom_transforms
 
     def fit(self, dataset, val_dataset=None, epochs=10, learning_rate=0.005, momentum=0.9,
             weight_decay=0.0005, gamma=0.1, lr_step_size=3, verbose=False):
@@ -240,6 +286,21 @@ class WorkerRCNN(qtc.QThread):
             test_dataset = Dataset(f"{self.dataset_name}/valid/")
             loader = DataLoader(train_dataset, batch_size=self.batch_size, shuffle=True)
 
+            # Validate XML annotations (keep XML as single source of truth)
+            train_xml_folder = os.path.join(self.dataset_name, 'train')
+            try:
+                xml_labels = extract_labels_from_xml_folder(train_xml_folder)
+                unknown_xml_labels = sorted(xml_labels - set(self._classes))
+                if unknown_xml_labels:
+                    msg = f"Found labels in XML not in annotation: {unknown_xml_labels}. Update annotation or edit XMLs."
+                    self.learn.emit(msg)
+                    self.exception.emit(msg)
+                    raise ValueError(msg)
+            except Exception as e:
+                # emit and re-raise to stop training
+                logger.exception("Error while validating XML labels: %s", e)
+                raise
+
             # model = Model(self.annotation)
 
             self.learn.emit("\n")
@@ -278,9 +339,12 @@ class WorkerRCNN(qtc.QThread):
                 self.save(os.path.join(f"../Models/{self.model_name}.pth"))
                 self.status.emit(f"The model {self.model_name}.pth has saved.")
                 self.learn.emit(f"The model {self.model_name}.pth has saved")
-                with open(os.path.join(f"../Models/{self.model_name}.pth.txt"), "w") as f:
-                    [f.writelines(f"{line}\n") for line in self.annotation]
-                f.close()
+                # Save annotations as a single comma-separated line (no surrounding brackets/quotes)
+                ann_file = os.path.join(f"../Models/{self.model_name}.pth.txt")
+                os.makedirs(os.path.dirname(ann_file), exist_ok=True)
+                with open(ann_file, "w", encoding="utf-8") as f:
+                    f.write(", ".join(self.annotation))
+
                 self.status.emit(f"The annotation {self.model_name}.pth.txt has saved")
                 self.learn.emit(f"The annotation {self.model_name}.pth.txt has saved")
 
