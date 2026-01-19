@@ -31,6 +31,18 @@ class LearningWindow(qtw.QMainWindow, Ui_LearningWindow):
         self.__init_graph()
         self.__init_buttons()
 
+        cb_export = getattr(self, 'cb_export_onnx', None)
+        if cb_export is not None:
+            cb_export.toggled.connect(self.__onnx_export_toggled)
+
+    def __onnx_export_toggled(self, checked: bool):
+        cb_quant = getattr(self, 'cb_quantize_int8', None)
+        if cb_quant is None:
+            return
+        cb_quant.setEnabled(bool(checked))
+        if not checked:
+            cb_quant.setChecked(False)
+
     def __init_buttons(self):
         self.btn_start.clicked.connect(self.__start_learning)
         self.btn_stop.clicked.connect(self.__stop_learning)
@@ -57,52 +69,76 @@ class LearningWindow(qtw.QMainWindow, Ui_LearningWindow):
         name_dataset = (self.le_dataset.text() or '').strip()
         model_name = (self.le_model_name.text() or '').strip()
 
+        # WorkerRCNN accepts the raw annotation string and normalizes it internally.
+        annotation_arg = annotation  # type: ignore[arg-type]
         self.learning_worker = WorkerRCNN(
             dataset_name=name_dataset,
             batch_size=self.sb_batch_size.value(),
-            annotation=annotation,
+            annotation=annotation_arg,
             epochs=self.sb_epoch.value(),
             lr_step_size=self.sb_lr_step_size.value(),
             learning_rate=self.dsb_lr_rate.value(),
             model_name=model_name
         )
 
-    def __start_learning(self):
+    def _learning_inputs(self):
         dataset = (self.le_dataset.text() or '').strip()
         annotation = self.normalize_annotation_text(self.le_annotation.text())
         model_name = (self.le_model_name.text() or '').strip()
+        return dataset, annotation, model_name
 
-        if dataset and annotation and model_name and self.dataset_has_train_valid(dataset):
-            self.upload_deep_learning_worker()
+    def _validate_learning_inputs(self, dataset: str, annotation: str, model_name: str) -> bool:
+        if not dataset:
+            self.__message_exception("Dataset path is empty")
+            return False
+        if not self.dataset_has_train_valid(dataset):
+            self.__message_exception("Dataset must contain train/ and valid/ folders")
+            return False
+        if not annotation:
+            self.__message_exception("Annotation is empty")
+            return False
+        if not model_name:
+            self.__message_exception("Model name is empty")
+            return False
+        return True
 
-            self.pte_report.clear()
+    def _apply_augmentation_settings(self):
+        self.learning_worker.set_resize(self.sb_resize.value())
+        self.learning_worker.set_random_horizontal_flip(self.dsb_hor_flip.value())
+        self.learning_worker.set_random_vertical_flip(self.dsb_vert_flip.value())
+        self.learning_worker.set_random_autocontrast(self.dsb_auto_contr.value())
+        self.learning_worker.set_random_equalize(self.dsb_equalize.value())
+        self.learning_worker.set_random_rotation(self.sb_rotation.value())
 
-            # set augmentation
-            self.learning_worker.set_resize(self.sb_resize.value())
-            self.learning_worker.set_random_horizontal_flip(self.dsb_hor_flip.value())
-            self.learning_worker.set_random_vertical_flip(self.dsb_vert_flip.value())
-            self.learning_worker.set_random_autocontrast(self.dsb_auto_contr.value())
-            self.learning_worker.set_random_equalize(self.dsb_equalize.value())
-            self.learning_worker.set_random_rotation(self.sb_rotation.value())
+    def _apply_onnx_settings(self):
+        cb_export = getattr(self, 'cb_export_onnx', None)
+        cb_quant = getattr(self, 'cb_quantize_int8', None)
+        if cb_export is not None:
+            self.learning_worker.set_export_onnx(cb_export.isChecked())
+        if cb_quant is not None:
+            self.learning_worker.set_quantize_onnx_int8(cb_quant.isChecked())
 
-            self.learning_worker.enabled_learning_process.connect(self.__action_running_process)
-            self.learning_worker.learn.connect(self.__update_deep_learning)
-            self.learning_worker.learn_graph.connect(self.__update_deep_learning_graph)
-            self.learning_worker.status.connect(self.__message_status)
-            self.learning_worker.exception.connect(self.__message_exception)
-            self.learning_worker.start()
+    def _wire_learning_signals(self):
+        self.learning_worker.enabled_learning_process.connect(self.__action_running_process)
+        self.learning_worker.learn.connect(self.__update_deep_learning)
+        self.learning_worker.learn_graph.connect(self.__update_deep_learning_graph)
+        self.learning_worker.status.connect(self.__message_status)
+        self.learning_worker.exception.connect(self.__message_exception)
 
-        else:
-            if not dataset:
-                self.__message_exception("Dataset path is empty")
-            elif not self.dataset_has_train_valid(dataset):
-                self.__message_exception("Dataset must contain train/ and valid/ folders")
-            elif not annotation:
-                self.__message_exception("Annotation is empty")
-            elif not model_name:
-                self.__message_exception("Model name is empty")
-            else:
-                self.__message_exception("Check input data!")
+    def __start_learning(self):
+        dataset, annotation, model_name = self._learning_inputs()
+
+        if not self._validate_learning_inputs(dataset, annotation, model_name):
+            self.__message_exception("Check input data!")
+            return
+
+        self.upload_deep_learning_worker()
+        self.pte_report.clear()
+
+        self._apply_augmentation_settings()
+        self._apply_onnx_settings()
+        self._wire_learning_signals()
+        self.learning_worker.start()
 
     def __stop_learning(self):
         if isinstance(self.learning_worker, WorkerRCNN):
@@ -133,6 +169,12 @@ class LearningWindow(qtw.QMainWindow, Ui_LearningWindow):
             self.sb_rotation.setEnabled(False)
             self.le_model_name.setEnabled(False)
             self.graphicsView.setEnabled(False)
+            cb_export = getattr(self, 'cb_export_onnx', None)
+            cb_quant = getattr(self, 'cb_quantize_int8', None)
+            if cb_export is not None:
+                cb_export.setEnabled(False)
+            if cb_quant is not None:
+                cb_quant.setEnabled(False)
         else:
             self.btn_start.setEnabled(True)
             self.btn_stop.setEnabled(False)
@@ -152,6 +194,12 @@ class LearningWindow(qtw.QMainWindow, Ui_LearningWindow):
             self.sb_rotation.setEnabled(True)
             self.le_model_name.setEnabled(True)
             self.graphicsView.setEnabled(True)
+            cb_export = getattr(self, 'cb_export_onnx', None)
+            cb_quant = getattr(self, 'cb_quantize_int8', None)
+            if cb_export is not None:
+                cb_export.setEnabled(True)
+            if cb_quant is not None and cb_export is not None:
+                cb_quant.setEnabled(bool(cb_export.isChecked()))
 
     @qtc.pyqtSlot(str)
     def __update_deep_learning(self, val):
@@ -174,3 +222,4 @@ class LearningWindow(qtw.QMainWindow, Ui_LearningWindow):
     def __message_status(self, message):
         self.statusBar().setStyleSheet("color: lightgreen; background-color: darkgreen")
         self.statusBar().showMessage(message)
+

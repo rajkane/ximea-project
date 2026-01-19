@@ -77,6 +77,10 @@ class WorkerRCNN(qtc.QThread):
         self._classes = ['__background__'] + self.annotation
         self._int_mapping = {label: index for index, label in enumerate(self._classes)}
 
+        # Optional post-training exports (kept off by default to avoid changing GUI behavior)
+        self.export_onnx: bool = False
+        self.quantize_onnx_int8: bool = False
+
     def status_interrupt(self):
         self.learn.emit("\tDeep Learning has been interrupted!")
         self.exception.emit("Deep Learning has been interrupted!")
@@ -137,6 +141,12 @@ class WorkerRCNN(qtc.QThread):
 
     def set_random_rotation(self, rotation):
         self.rotation = rotation
+
+    def set_export_onnx(self, enabled: bool):
+        self.export_onnx = bool(enabled)
+
+    def set_quantize_onnx_int8(self, enabled: bool):
+        self.quantize_onnx_int8 = bool(enabled)
 
     @staticmethod
     def _add_prob_transform(transforms_list, p, factory):
@@ -335,6 +345,15 @@ class WorkerRCNN(qtc.QThread):
                 self.status.emit(f"The annotation {self.model_name}.pth.txt has saved")
                 self.learn.emit(f"The annotation {self.model_name}.pth.txt has saved")
 
+                # Optional ONNX export + INT8 quantization
+                onnx_path, onnx_int8_path = self._onnx_paths()
+                if self.export_onnx:
+                    self.learn.emit(f"Exporting ONNX model to {onnx_path}...")
+                    self._export_to_onnx(onnx_path)
+                    if self.quantize_onnx_int8:
+                        self.learn.emit(f"Exporting INT8 quantized ONNX model to {onnx_int8_path}...")
+                        self._quantize_onnx_dynamic_int8(onnx_path, onnx_int8_path)
+
                 self.learn.emit("")
                 # self.learn.emit(f"{equals}")
                 self.learn.emit("")
@@ -350,3 +369,87 @@ class WorkerRCNN(qtc.QThread):
         self.enabled_learning_process.emit(False)
         self.thread_active = False
         self.quit()
+
+    def _onnx_paths(self) -> tuple[str, str]:
+        """Return (onnx_fp32_path, onnx_int8_path) under Models/."""
+        onnx_path = os.path.join(f"../Models/{self.model_name}.onnx")
+        onnx_int8_path = os.path.join(f"../Models/{self.model_name}.int8.onnx")
+        return onnx_path, onnx_int8_path
+
+    def _export_to_onnx(self, out_path: str) -> None:
+        """Export the trained torch model to ONNX.
+
+        Notes:
+        - This exports a torchvision FasterRCNN model.
+        - ONNX output schema can vary; ONNX inference decoding is handled elsewhere.
+        """
+        os.makedirs(os.path.dirname(out_path), exist_ok=True)
+
+        model = self._model
+        model.eval()
+
+        # Export is generally more stable on CPU (especially for tracing)
+        export_device = torch.device('cpu')
+        model_cpu = model.to(export_device)
+
+        dummy = torch.zeros((1, 3, 600, 800), dtype=torch.float32, device=export_device)
+
+        with torch.no_grad():
+            torch.onnx.export(
+                model_cpu,
+                dummy,
+                out_path,
+                opset_version=11,
+                do_constant_folding=True,
+                input_names=['images'],
+                output_names=['outputs'],
+                dynamic_axes={
+                    'images': {0: 'batch', 2: 'height', 3: 'width'},
+                },
+            )
+
+        # Move back to training/inference device for any subsequent operations
+        model_cpu.to(self.device)
+
+    def _emit_warning_messages(self, warnings_list):
+        for ww in warnings_list:
+            try:
+                self.learn.emit(str(ww.message))
+            except Exception:
+                pass
+
+    def _emit_info(self, msg: str):
+        try:
+            self.learn.emit(msg)
+        except Exception:
+            pass
+
+    def _try_quantize_dynamic(self, quantize_dynamic, QuantType, in_path: str, out_path: str):
+        import warnings
+
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter('always')
+            quantize_dynamic(
+                model_input=in_path,
+                model_output=out_path,
+                weight_type=QuantType.QInt8,
+            )
+        self._emit_warning_messages(w)
+
+    def _quantize_onnx_dynamic_int8(self, in_path: str, out_path: str) -> None:
+        """Create an INT8 dynamically-quantized ONNX model (CPU oriented).
+
+        FasterRCNN graphs often contain ops that ONNXRuntime can't fully infer for
+        quantization (e.g., NonZero). We treat quantization as best-effort.
+        """
+        os.makedirs(os.path.dirname(out_path), exist_ok=True)
+
+        try:
+            from onnxruntime.quantization import QuantType, quantize_dynamic
+        except Exception as e:
+            raise RuntimeError(f"onnxruntime quantization is not available: {e}")
+
+        try:
+            self._try_quantize_dynamic(quantize_dynamic, QuantType, in_path, out_path)
+        except Exception as e:
+            self._emit_info(f"ONNX INT8 quantization failed: {e}")

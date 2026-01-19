@@ -201,8 +201,6 @@ class Ui_LearningWindow(object):
         self.le_annotation.setMinimumSize(QtCore.QSize(200, 0))
         self.le_annotation.setObjectName("le_annotation")
         self.gridLayout.addWidget(self.le_annotation, 2, 1, 1, 1)
-        spacerItem = QtWidgets.QSpacerItem(20, 40, QtWidgets.QSizePolicy.Policy.Minimum, QtWidgets.QSizePolicy.Policy.Expanding)
-        self.gridLayout.addItem(spacerItem, 15, 1, 1, 1)
         self.sb_rotation = QtWidgets.QSpinBox(parent=self.centralwidget)
         sizePolicy = QtWidgets.QSizePolicy(QtWidgets.QSizePolicy.Policy.Fixed, QtWidgets.QSizePolicy.Policy.Fixed)
         sizePolicy.setHorizontalStretch(0)
@@ -284,6 +282,13 @@ class Ui_LearningWindow(object):
         self.label_7 = QtWidgets.QLabel(parent=self.centralwidget)
         self.label_7.setObjectName("label_7")
         self.gridLayout.addWidget(self.label_7, 6, 0, 1, 1)
+        self.cb_export_onnx = QtWidgets.QCheckBox(parent=self.centralwidget)
+        self.cb_export_onnx.setObjectName("cb_export_onnx")
+        self.gridLayout.addWidget(self.cb_export_onnx, 15, 0, 1, 1)
+        self.cb_quantize_int8 = QtWidgets.QCheckBox(parent=self.centralwidget)
+        self.cb_quantize_int8.setEnabled(False)
+        self.cb_quantize_int8.setObjectName("cb_quantize_int8")
+        self.gridLayout.addWidget(self.cb_quantize_int8, 15, 1, 1, 1)
         self.gridLayout_2.addLayout(self.gridLayout, 0, 0, 1, 1)
         self.graphicsView = PlotWidget(parent=self.centralwidget)
         self.graphicsView.setObjectName("graphicsView")
@@ -317,6 +322,8 @@ class Ui_LearningWindow(object):
         LearningWindow.setTabOrder(self.btn_stop, self.btn_clear)
         LearningWindow.setTabOrder(self.btn_clear, self.pte_report)
         LearningWindow.setTabOrder(self.pte_report, self.graphicsView)
+        LearningWindow.setTabOrder(self.graphicsView, self.cb_export_onnx)
+        LearningWindow.setTabOrder(self.cb_export_onnx, self.cb_quantize_int8)
 
     def retranslateUi(self, LearningWindow):
         _translate = QtCore.QCoreApplication.translate
@@ -338,4 +345,6 @@ class Ui_LearningWindow(object):
         self.lbl_auto_contr.setText(_translate("LearningWindow", "Auto Contrast"))
         self.lbl_hor_flip.setText(_translate("LearningWindow", "Horizontal Flip"))
         self.label_7.setText(_translate("LearningWindow", "Augmentation"))
+        self.cb_export_onnx.setText(_translate("LearningWindow", "Export ONNX after training"))
+        self.cb_quantize_int8.setText(_translate("LearningWindow", "Quantize ONNX (INT8)"))
 from pyqtgraph import PlotWidget

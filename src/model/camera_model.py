@@ -102,6 +102,41 @@ class CameraModel(qtc.QThread):
     # -----------------
     # Detector
     # -----------------
+    def _try_load_onnx_detector(self, resolved: str) -> bool:
+        if resolved != 'onnx-cpu':
+            return False
+        try:
+            import os
+            base = os.path.splitext(self.__model)[0]
+            onnx_int8 = base + '.int8.onnx'
+            onnx_fp32 = base + '.onnx'
+            onnx_path = onnx_int8 if os.path.isfile(onnx_int8) else onnx_fp32
+
+            threads = int(os.getenv('ONNX_NUM_THREADS', '4'))
+            from src.model.onnx_inference import OnnxDetector
+
+            self.device = 'cpu'
+            self.model = OnnxDetector(onnx_path, self.__annot, threads=threads)
+            self._detector_ready = True
+            return True
+        except Exception:
+            return False
+
+    def _load_torch_detector(self, resolved: str):
+        import torch
+        from detecto import core
+
+        if resolved == 'torch-cpu':
+            self.device = 'cpu'
+        else:
+            self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
+
+        if self.device == 'cuda':
+            torch.cuda.empty_cache()
+
+        self.model = core.Model.load(self.__model, self.__annot)
+        self._detector_ready = True
+
     def detector(self):
         """Load detector model once (idempotent)."""
         if self._detector_ready:
@@ -110,36 +145,12 @@ class CameraModel(qtc.QThread):
             return
 
         import os
-        import torch
-        from detecto import core
+        resolved = os.getenv('INFERENCE_BACKEND_RESOLVED', '').strip().lower()
 
-        resolved = os.getenv("INFERENCE_BACKEND_RESOLVED", "").strip().lower()
+        if self._try_load_onnx_detector(resolved):
+            return
 
-        # Optional ONNX
-        if resolved == "onnx-cpu":
-            try:
-                onnx_path = os.path.splitext(self.__model)[0] + ".onnx"
-                threads = int(os.getenv("ONNX_NUM_THREADS", "4"))
-                from src.model.onnx_inference import OnnxDetector
-
-                self.device = "cpu"
-                self.model = OnnxDetector(onnx_path, self.__annot, threads=threads)
-                self._detector_ready = True
-                return
-            except Exception:
-                pass
-
-        # Torch
-        if resolved == "torch-cpu":
-            self.device = "cpu"
-        else:
-            self.device = "cuda" if torch.cuda.is_available() else "cpu"
-
-        if self.device == "cuda":
-            torch.cuda.empty_cache()
-
-        self.model = core.Model.load(self.__model, self.__annot)
-        self._detector_ready = True
+        self._load_torch_detector(resolved)
 
     @staticmethod
     def detector_objects(model, frame):
@@ -287,9 +298,32 @@ class CameraModel(qtc.QThread):
         self.eag_auto_maunal()
         return self.img.get_image_data_numpy(True)
 
+    @staticmethod
+    def _has_drawable_detections(labels, boxes, scores) -> bool:
+        if not labels or boxes is None or scores is None:
+            return False
+        try:
+            if getattr(boxes, 'shape', None) is None:
+                return False
+            if len(boxes.shape) != 2 or int(boxes.shape[1]) != 4:
+                return False
+        except Exception:
+            return False
+        return True
+
     def detection(self, img):
-        if self.__is_model and self.__model is not None and self.__annot is not None:
-            self.detector_objects(model=self.model, frame=img)
+        if not (self.__is_model and self.__model is not None and self.__annot is not None):
+            return
+
+        try:
+            labels, boxes, scores = self.model.predict(img)
+        except Exception:
+            return
+
+        if not self._has_drawable_detections(labels, boxes, scores):
+            return
+
+        self.detector_objects(model=self.model, frame=img)
 
     def convert_frame(self, img):
         convert = qtg.QImage(
@@ -431,4 +465,3 @@ class CameraModel(qtc.QThread):
         if self.isRunning():
             self.quit()
             self.wait()
-

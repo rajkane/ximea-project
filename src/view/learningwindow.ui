@@ -311,22 +311,62 @@ color: rgb(255, 255, 255);</string>
       </item>
       <item row="14" column="0">
        <widget class="QLabel" name="lbl_model_name">
+        <property name="text">
+         <string>Model Name</string>
+        </property>
+       </widget>
+      </item>
+      <item row="14" column="1">
+       <widget class="QLineEdit" name="le_model_name">
         <property name="sizePolicy">
-         <sizepolicy hsizetype="Fixed" vsizetype="Preferred">
+         <sizepolicy hsizetype="Preferred" vsizetype="Fixed">
           <horstretch>0</horstretch>
           <verstretch>0</verstretch>
          </sizepolicy>
         </property>
         <property name="minimumSize">
          <size>
-          <width>100</width>
+          <width>200</width>
           <height>0</height>
          </size>
         </property>
+       </widget>
+      </item>
+      <item row="15" column="0">
+       <widget class="QCheckBox" name="cb_export_onnx">
         <property name="text">
-         <string>Model Name</string>
+         <string>Export ONNX after training</string>
+        </property>
+        <property name="checked">
+         <bool>false</bool>
         </property>
        </widget>
+      </item>
+      <item row="15" column="1">
+       <widget class="QCheckBox" name="cb_quantize_int8">
+        <property name="text">
+         <string>Quantize ONNX (INT8)</string>
+        </property>
+        <property name="enabled">
+         <bool>false</bool>
+        </property>
+        <property name="checked">
+         <bool>false</bool>
+        </property>
+       </widget>
+      </item>
+      <item row="19" column="1">
+       <spacer name="verticalSpacer">
+        <property name="orientation">
+         <enum>Qt::Orientation::Vertical</enum>
+        </property>
+        <property name="sizeHint" stdset="0">
+         <size>
+          <width>20</width>
+          <height>40</height>
+         </size>
+        </property>
+       </spacer>
       </item>
       <item row="0" column="0">
        <widget class="QToolButton" name="tbtn_dataset">
@@ -412,19 +452,6 @@ color: rgb(255, 255, 255);</string>
          </size>
         </property>
        </widget>
-      </item>
-      <item row="15" column="1">
-       <spacer name="verticalSpacer">
-        <property name="orientation">
-         <enum>Qt::Orientation::Vertical</enum>
-        </property>
-        <property name="sizeHint" stdset="0">
-         <size>
-          <width>20</width>
-          <height>40</height>
-         </size>
-        </property>
-       </spacer>
       </item>
       <item row="13" column="1">
        <widget class="QSpinBox" name="sb_rotation">

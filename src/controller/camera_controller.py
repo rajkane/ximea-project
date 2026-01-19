@@ -27,7 +27,43 @@ class MainWindow(qtw.QMainWindow, Ui_MainWindow):
         self.scale = 1
         self.__config_buttons()
         self.__config_other_objects()
+        self.__init_backend_selector()
         self.statusBar().showMessage("Ready")
+
+    def __init_backend_selector(self):
+        """Populate the backend selector.
+
+        This controls env vars INFERENCE_BACKEND / INFERENCE_BACKEND_RESOLVED used by CameraModel.detector().
+        """
+        cb = getattr(self, 'cb_backend', None)
+        if cb is None:
+            return
+
+        from src.model.backend import InferenceBackend
+
+        cb.clear()
+        cb.addItem("Auto", InferenceBackend.AUTO.value)
+        cb.addItem("PyTorch CPU", InferenceBackend.TORCH_CPU.value)
+        cb.addItem("ONNX CPU", InferenceBackend.ONNX_CPU.value)
+        cb.addItem("PyTorch CUDA", InferenceBackend.TORCH_CUDA.value)
+
+    def __apply_selected_backend(self):
+        import os
+        cb = getattr(self, 'cb_backend', None)
+        if cb is None:
+            return
+
+        from src.model.backend import select_backend
+
+        requested = cb.currentData()
+        os.environ["INFERENCE_BACKEND"] = str(requested)
+        resolved = select_backend(requested)
+        os.environ["INFERENCE_BACKEND_RESOLVED"] = resolved.value
+
+        if resolved.value == "torch-cpu":
+            os.environ.setdefault("CUDA_VISIBLE_DEVICES", "")
+
+        self.statusBar().showMessage(f"Backend: {resolved.value}")
 
     def __config_camera_window(self):
         if self._camera_is_running():
@@ -100,6 +136,7 @@ class MainWindow(qtw.QMainWindow, Ui_MainWindow):
             self.le_annotation.setText(os.path.basename(path_annotation))
 
     def __start_camera(self):
+        self.__apply_selected_backend()
         #if not isinstance(self.cam_process, CameraModel):
         self.cam_process = CameraModel()
         if self.chb_model.isChecked():

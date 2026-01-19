@@ -117,14 +117,101 @@ class OnnxDetector:
             return arr3[None, ...]
         return arr3[None, ...]
 
+    @staticmethod
+    def _as_list(outputs):
+        if outputs is None:
+            return []
+        if isinstance(outputs, (list, tuple)):
+            return list(outputs)
+        return [outputs]
+
+    @staticmethod
+    def _only_arrays(outputs_list):
+        return [o for o in outputs_list if hasattr(o, 'shape')]
+
+    @staticmethod
+    def _find_boxes(arrays):
+        for a in arrays:
+            try:
+                if len(a.shape) == 2 and int(a.shape[1]) == 4:
+                    return a
+            except Exception:
+                continue
+        return None
+
+    @staticmethod
+    def _find_labels(arrays, boxes):
+        import numpy as np
+
+        for a in arrays:
+            if a is boxes:
+                continue
+            try:
+                if len(a.shape) == 1 and np.issubdtype(a.dtype, np.integer):
+                    return a
+            except Exception:
+                continue
+        return None
+
+    @staticmethod
+    def _find_scores(arrays, boxes, labels_arr):
+        import numpy as np
+
+        for a in arrays:
+            if a is boxes or a is labels_arr:
+                continue
+            try:
+                if len(a.shape) == 1 and np.issubdtype(a.dtype, np.floating):
+                    return a
+            except Exception:
+                continue
+        return None
+
+    @staticmethod
+    def _fallback_1d(arrays, boxes, labels_arr):
+        for a in arrays:
+            if a is boxes or a is labels_arr:
+                continue
+            try:
+                if len(a.shape) == 1:
+                    return a
+            except Exception:
+                continue
+        return None
+
+    @staticmethod
+    def _labels_to_strings(labels_arr):
+        if labels_arr is None:
+            return []
+        try:
+            return [str(int(x)) for x in labels_arr.tolist()]
+        except Exception:
+            return []
+
+    @staticmethod
+    def _decode_outputs(outputs):
+        """Best-effort decode for common torchvision FasterRCNN ONNX exports.
+
+        Returns (labels:list[str], boxes, scores).
+        """
+        outputs_list = OnnxDetector._as_list(outputs)
+        if not outputs_list:
+            return [], None, None
+
+        arrays = OnnxDetector._only_arrays(outputs_list)
+        boxes = OnnxDetector._find_boxes(arrays)
+        labels_arr = OnnxDetector._find_labels(arrays, boxes)
+        scores = OnnxDetector._find_scores(arrays, boxes, labels_arr)
+        if boxes is not None and scores is None:
+            scores = OnnxDetector._fallback_1d(arrays, boxes, labels_arr)
+
+        labels = OnnxDetector._labels_to_strings(labels_arr)
+        return labels, boxes, scores
+
     def predict(self, frame):
         # Run session
         outputs = self.sess.run(None, {self.inp_name: self._to_input(frame)})
 
-        # We don't assume a specific detection-head output schema here.
-        # For now we return raw outputs as boxes/scores and leave labels empty.
-        # This keeps the app from crashing and makes it easy to iterate.
-        labels: list[str] = []
-        boxes = outputs[0] if len(outputs) > 0 else None
-        scores = outputs[1] if len(outputs) > 1 else None
-        return labels, boxes, scores
+        # Decode to Detecto-like output. For now labels are numeric strings unless
+        # ONNX provides label ids we can map.
+        return self._decode_outputs(outputs)
