@@ -148,6 +148,25 @@ Output example:
 
 If you want true INT8 quantization for ONNX, we would need to add an explicit quantization step (and possibly additional tooling). Ask before we add any extra packages for that.
 
+## Camera fallback (no Ximea connected)
+
+By default the app tries to open the configured **Ximea** camera first. If it is not available (not connected / driver not installed / wrong SN), the app automatically falls back to an **OpenCV** camera (**USB webcam / laptop camera**) and continues streaming.
+
+### OpenCV camera index auto-scan
+
+When falling back to OpenCV, the app can try multiple camera indices:
+
+- `OPENCV_CAMERA_INDEX` — preferred index to try first (default `0`)
+- `OPENCV_CAMERA_MAX_INDEX` — maximum index to try if the preferred one fails (default `3`)
+
+Example (try indices 0..5):
+
+```bash
+OPENCV_CAMERA_INDEX=0 OPENCV_CAMERA_MAX_INDEX=5 python src/main.py
+```
+
+Tip: if your laptop camera is `0` and your USB camera is `1`, set `OPENCV_CAMERA_INDEX=1`.
+
 ## Troubleshooting
 
 - **Training stops with unknown label error**: your XML files contain a label that is not listed in the GUI annotation field. Add the missing label(s) in the GUI or fix the XML annotations.
