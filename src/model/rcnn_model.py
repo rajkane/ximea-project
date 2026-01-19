@@ -159,78 +159,78 @@ class Dataset(torch.utils.data.Dataset):
         # Read in the image from the file name in the 0th column
         object_entries = self._csv.loc[self._csv['image_id'] == idx]
 
-        img_name = os.path.join(self._root_dir, object_entries.iloc[0, 0])
-        image = read_image(img_name)
-
-        boxes = []
-        labels = []
-        for object_idx, row in object_entries.iterrows():
-            # Read in xmin, ymin, xmax, and ymax
-            box = self._csv.iloc[object_idx, 4:8]
-            boxes.append(box)
-            # Read in the labe
-            label = self._csv.iloc[object_idx, 3]
-            labels.append(label)
-
-        boxes = torch.tensor(boxes).view(-1, 4)
-
-        targets = {'boxes': boxes, 'labels': labels}
+        image = self._load_image(object_entries)
+        targets = self._load_targets(object_entries)
 
         # Perform transformations
         if self.transform:
             width = object_entries.iloc[0, 1]
             height = object_entries.iloc[0, 2]
+            image, targets = self._apply_transforms(image, targets, width, height)
 
-            # Apply the transforms manually to be able to deal with
-            # transforms like Resize or RandomHorizontalFlip
-            updated_transforms = []
-            scale_factor = 1.0
-            random_flip = 0.0
-            for t in self.transform.transforms:
-                # Add each transformation to our list
-                updated_transforms.append(t)
+        return image, targets
 
-                # If a resize transformation exists, scale down the coordinates
-                # of the box by the same amount as the resize
-                if isinstance(t, transforms.Resize):
-                    # t.size can be an int or a (h, w) tuple; ensure scalar scale factor
-                    original_size = float(min(height, width))
-                    if isinstance(t.size, (tuple, list)):
-                        target_size = float(min(t.size))
-                    else:
-                        target_size = float(t.size)
-                    if target_size != 0:
-                        scale_factor = original_size / target_size
-                    else:
-                        scale_factor = 1.0
+    def _load_image(self, object_entries):
+        img_name = os.path.join(self._root_dir, object_entries.iloc[0, 0])
+        return read_image(img_name)
 
-                # If a horizontal flip transformation exists, get its probability
-                # so we can apply it manually to both the image and the boxes.
-                elif isinstance(t, transforms.RandomHorizontalFlip):
-                    random_flip = t.p
+    def _load_targets(self, object_entries):
+        boxes = []
+        labels = []
+        for object_idx, _row in object_entries.iterrows():
+            box_ser = self._csv.iloc[object_idx, 4:8]
+            boxes.append([float(v) for v in box_ser.to_list()])
+            labels.append(self._csv.iloc[object_idx, 3])
+        boxes_t = torch.tensor(boxes, dtype=torch.float32).view(-1, 4)
+        return {'boxes': boxes_t, 'labels': labels}
 
-            # Apply each transformation manually
-            for t in updated_transforms:
-                # Handle the horizontal flip case, where we need to apply
-                # the transformation to both the image and the box labels
-                if isinstance(t, transforms.RandomHorizontalFlip):
-                    if random.random() < random_flip:
-                        image = transforms.RandomHorizontalFlip(1)(image)
-                        for idx, box in enumerate(targets['boxes']):
-                            # Flip box's x-coordinates
-                            box[0] = width - box[0]
-                            box[2] = width - box[2]
-                            box[[0, 2]] = box[[2, 0]]
-                            targets['boxes'][idx] = box
-                else:
-                    image = t(image)
+    @staticmethod
+    def _get_resize_scale_factor(t: transforms.Resize, width, height) -> float:
+        original_size = float(min(height, width))
+        if isinstance(t.size, (tuple, list)):
+            target_size = float(min(t.size))
+        else:
+            target_size = float(t.size)
+        return (original_size / target_size) if target_size else 1.0
 
-            # Scale down box if necessary
-            if float(scale_factor) != 1.0:
-                for idx, box in enumerate(targets['boxes']):
-                    box = (box / scale_factor).long()
-                    targets['boxes'][idx] = box
+    @staticmethod
+    def _maybe_flip(image, targets, width, p: float):
+        if random.random() >= p:
+            return image, targets
+        image = transforms.RandomHorizontalFlip(1)(image)
+        for idx, box in enumerate(targets['boxes']):
+            box[0] = width - box[0]
+            box[2] = width - box[2]
+            box[[0, 2]] = box[[2, 0]]
+            targets['boxes'][idx] = box
+        return image, targets
 
+    @staticmethod
+    def _scale_boxes(targets, scale_factor: float):
+        if float(scale_factor) == 1.0:
+            return targets
+        for idx, box in enumerate(targets['boxes']):
+            targets['boxes'][idx] = (box / scale_factor)
+        return targets
+
+    def _apply_transforms(self, image, targets, width, height):
+        updated_transforms = []
+        scale_factor = 1.0
+        random_flip = 0.0
+        for t in self.transform.transforms:
+            updated_transforms.append(t)
+            if isinstance(t, transforms.Resize):
+                scale_factor = self._get_resize_scale_factor(t, width, height)
+            elif isinstance(t, transforms.RandomHorizontalFlip):
+                random_flip = t.p
+
+        for t in updated_transforms:
+            if isinstance(t, transforms.RandomHorizontalFlip):
+                image, targets = self._maybe_flip(image, targets, width, random_flip)
+            else:
+                image = t(image)
+
+        targets = self._scale_boxes(targets, scale_factor)
         return image, targets
 
 
@@ -340,21 +340,10 @@ class Model:
         if epochs > 0:
             self._disable_normalize = False
 
-        # Convert dataset to data loader if not already
-        if not isinstance(dataset, DataLoader):
-            dataset = DataLoader(dataset, shuffle=True)
+        dataset, val_dataset = self._ensure_dataloaders(dataset, val_dataset)
 
-        if val_dataset is not None and not isinstance(val_dataset, DataLoader):
-            val_dataset = DataLoader(val_dataset)
-
-        data = []
         losses = []
-        # Get parameters that have grad turned on (i.e. parameters that should be trained)
-        parameters = [p for p in self._model.parameters() if p.requires_grad]
-        # Create an optimizer that uses SGD (stochastic gradient descent) to train the parameters
-        optimizer = torch.optim.SGD(parameters, lr=learning_rate, momentum=momentum, weight_decay=weight_decay)
-        # Create a learning rate scheduler that decreases learning rate by gamma every lr_step_size epochs
-        lr_scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=lr_step_size, gamma=gamma)
+        optimizer, lr_scheduler = self._make_optimizer(learning_rate, momentum, weight_decay, lr_step_size, gamma)
 
         # Train on the entire dataset for the specified number of times (epochs)
         for epoch in range(epochs):
@@ -367,54 +356,59 @@ class Model:
             if verbose:
                 print('Begin iterating over training dataset')
 
-            iterable = tqdm(dataset, position=0, leave=True) if verbose else dataset
-            for images, targets in iterable:
-                self.convert_to_int_labels(targets)
-                images, targets = self.to_device(images, targets)
-
-                # Calculate the model's loss (i.e. how well it does on the current
-                # image and target, with a lower loss being better)
-                loss_dict = self._model(images, targets)
-                total_loss = sum(loss for loss in loss_dict.values())
-
-                # Zero any old/existing gradients on the model's parameters
-                optimizer.zero_grad()
-                # Compute gradients for each parameter based on the current loss calculation
-                total_loss.backward()
-                # Update model parameters from gradients: param -= learning_rate * param.grad
-                optimizer.step()
+            self._train_epoch(dataset, optimizer, verbose)
 
             # Validation step
-            if val_dataset is not None:
-                avg_loss = 0
-                with torch.no_grad():
-                    if verbose:
-                        print('Begin iterating over validation dataset')
-
-                    iterable = tqdm(val_dataset, position=0, leave=True) if verbose else val_dataset
-                    for images, targets in iterable:
-                        self.convert_to_int_labels(targets)
-                        images, targets = self.to_device(images, targets)
-                        loss_dict = self._model(images, targets)
-                        total_loss = sum(loss for loss in loss_dict.values())
-                        avg_loss += total_loss.item()
-
-                avg_loss /= len(val_dataset.dataset)
+            avg_loss = self._validate_epoch(val_dataset, verbose)
+            if avg_loss is not None:
                 losses.append(avg_loss)
-
-                if verbose:
-                    print('Loss: {}'.format(avg_loss))
-                self.learn.emit(
-                    f"\t|\tEpoch: {epoch + 1:003d}/{epochs:003d}\t|\tLoss: {avg_loss:0005.4f}\t|")
-                # self.learn.emit(f"\t{dashed}")
-                data.append((epoch + 1, avg_loss))
-                self.learn_graph.emit(data)
 
             # Update the learning rate every few epochs
             lr_scheduler.step()
 
         if len(losses) > 0:
             return losses
+
+    def _ensure_dataloaders(self, dataset, val_dataset):
+        if not isinstance(dataset, DataLoader):
+            dataset = DataLoader(dataset, shuffle=True)
+        if val_dataset is not None and not isinstance(val_dataset, DataLoader):
+            val_dataset = DataLoader(val_dataset)
+        return dataset, val_dataset
+
+    def _make_optimizer(self, learning_rate, momentum, weight_decay, lr_step_size, gamma):
+        parameters = [p for p in self._model.parameters() if p.requires_grad]
+        optimizer = torch.optim.SGD(parameters, lr=learning_rate, momentum=momentum, weight_decay=weight_decay)
+        scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=lr_step_size, gamma=gamma)
+        return optimizer, scheduler
+
+    def _train_epoch(self, dataset, optimizer, verbose):
+        self._model.train()
+        iterable = tqdm(dataset, position=0, leave=True) if verbose else dataset
+        for images, targets in iterable:
+            self.convert_to_int_labels(targets)
+            images, targets = self.to_device(images, targets)
+            loss_dict = self._model(images, targets)
+            total_loss = sum(loss for loss in loss_dict.values())
+            optimizer.zero_grad()
+            total_loss.backward()
+            optimizer.step()
+
+    def _validate_epoch(self, val_dataset, verbose):
+        if val_dataset is None:
+            return None
+        avg_loss = 0.0
+        with torch.no_grad():
+            iterable = tqdm(val_dataset, position=0, leave=True) if verbose else val_dataset
+            for images, targets in iterable:
+                self.convert_to_int_labels(targets)
+                images, targets = self.to_device(images, targets)
+                loss_dict = self._model(images, targets)
+                total_loss = sum(loss for loss in loss_dict.values())
+                avg_loss += float(total_loss.item())
+        if len(val_dataset.dataset) == 0:
+            return 0.0
+        return avg_loss / len(val_dataset.dataset)
 
     def get_internal_model(self):
         """Returns the internal torchvision model that this class contains

@@ -138,33 +138,85 @@ class WorkerRCNN(qtc.QThread):
     def set_random_rotation(self, rotation):
         self.rotation = rotation
 
+    @staticmethod
+    def _add_prob_transform(transforms_list, p, factory):
+        """Append a torchvision transform created by factory(p) when p is a positive number."""
+        if isinstance(p, (int, float)) and p > 0:
+            transforms_list.append(factory(p))
+
+    def _build_transforms_list(self):
+        if self.resize is None:
+            raise ValueError("Resize not set. Call set_resize(resize) before get_augment().")
+
+        t = [transforms.ToPILImage(), transforms.Resize((self.resize, self.resize))]
+        self._add_prob_transform(t, self.horizontal, lambda p: transforms.RandomHorizontalFlip(p=p))
+        self._add_prob_transform(t, self.vertical, lambda p: transforms.RandomVerticalFlip(p=p))
+        self._add_prob_transform(t, self.autocontrast, lambda p: transforms.RandomAutocontrast(p=p))
+        self._add_prob_transform(t, self.equalize, lambda p: transforms.RandomEqualize(p=p))
+        if isinstance(self.rotation, (int, float)) and self.rotation > 0:
+            t.append(transforms.RandomRotation(degrees=(-1 * self.rotation, self.rotation)))
+        t.append(transforms.ToTensor())
+        t.append(utils.normalize_transform())
+        return t
+
     def get_augment(self):
         """Build and return the augmentation transforms based on the configured
         augmentation parameters. Only active transforms (where params are not None)
         are included; this avoids passing None into torchvision transforms.
         """
-        # Basic validation / defaults
-        if self.resize is None:
-            raise ValueError("Resize not set. Call set_resize(resize) before get_augment().")
-
-        transforms_list = [transforms.ToPILImage(), transforms.Resize((self.resize, self.resize))]
-
-        if isinstance(self.horizontal, (int, float)) and self.horizontal > 0:
-            transforms_list.append(transforms.RandomHorizontalFlip(p=self.horizontal))
-        if isinstance(self.vertical, (int, float)) and self.vertical > 0:
-            transforms_list.append(transforms.RandomVerticalFlip(p=self.vertical))
-        if isinstance(self.autocontrast, (int, float)) and self.autocontrast > 0:
-            transforms_list.append(transforms.RandomAutocontrast(p=self.autocontrast))
-        if isinstance(self.equalize, (int, float)) and self.equalize > 0:
-            transforms_list.append(transforms.RandomEqualize(p=self.equalize))
-        if isinstance(self.rotation, (int, float)) and self.rotation > 0:
-            transforms_list.append(transforms.RandomRotation(degrees=(-1 * self.rotation, self.rotation)))
-
-        transforms_list.append(transforms.ToTensor())
-        transforms_list.append(utils.normalize_transform())
-
+        transforms_list = self._build_transforms_list()
         self.custom_transforms = transforms.Compose(transforms_list)
         return self.custom_transforms
+
+    def _ensure_dataloaders(self, dataset, val_dataset):
+        if not isinstance(dataset, DataLoader):
+            dataset = DataLoader(dataset, shuffle=True)
+        if val_dataset is not None and not isinstance(val_dataset, DataLoader):
+            val_dataset = DataLoader(val_dataset)
+        return dataset, val_dataset
+
+    def _make_optimizer(self, learning_rate, momentum, weight_decay, lr_step_size, gamma):
+        params = [par for par in self._model.parameters() if par.requires_grad]
+        optimizer = torch.optim.SGD(params, lr=learning_rate, momentum=momentum, weight_decay=weight_decay)
+        scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=lr_step_size, gamma=gamma)
+        return optimizer, scheduler
+
+    def _train_one_epoch(self, dataset, optimizer, verbose):
+        self._model.train()
+        iterable = tqdm(dataset, position=0, leave=True,
+                        bar_format="{desc:<4}{bar:30}{percentage:3.0f}% {r_bar}") if verbose else dataset
+        for images, targets in iterable:
+            if self.thread_active is False:
+                break
+            self.convert_to_int_labels(targets)
+            images, targets = self.to_device(images, targets)
+            loss_dict = self._model(images, targets)
+            total_loss = sum(loss for loss in loss_dict.values())
+            optimizer.zero_grad()
+            total_loss.backward()
+            optimizer.step()
+            self.status.emit(f"Iterating over training set: {iterable}")
+
+    def _validate_one_epoch(self, val_dataset, verbose):
+        if val_dataset is None:
+            return None
+        avg_loss = 0.0
+        with torch.no_grad():
+            iterable = tqdm(val_dataset, position=0, leave=True,
+                            bar_format="{desc:<4}{bar:30}{percentage:3.0f}% {r_bar}") if verbose else val_dataset
+            for images, targets in iterable:
+                if self.thread_active is False:
+                    break
+                self.convert_to_int_labels(targets)
+                images, targets = self.to_device(images, targets)
+                loss_dict = self._model(images, targets)
+                total_loss = sum(loss for loss in loss_dict.values())
+                avg_loss += float(total_loss.item())
+                self.status.emit(f"Iterating over validation set: {iterable}")
+
+        if len(val_dataset.dataset) == 0:
+            return 0.0
+        return avg_loss / len(val_dataset.dataset)
 
     def fit(self, dataset, val_dataset=None, epochs=10, learning_rate=0.005, momentum=0.9,
             weight_decay=0.0005, gamma=0.1, lr_step_size=3, verbose=False):
@@ -176,22 +228,10 @@ class WorkerRCNN(qtc.QThread):
                   'For more information, see https://detecto.readthedocs.io/'
                   'en/latest/usage/quickstart.html#technical-requirements')
 
-        # Convert dataset to data loader if not already
-        if not isinstance(dataset, DataLoader):
-            dataset = DataLoader(dataset, shuffle=True)
-
-        if val_dataset is not None and not isinstance(val_dataset, DataLoader):
-            val_dataset = DataLoader(val_dataset)
-
+        dataset, val_dataset = self._ensure_dataloaders(dataset, val_dataset)
         data = []
         losses = []
-        # Get parameters that have grad turned on (i.e. parameters that should be trained)
-        parameters = [par for par in self._model.parameters() if par.requires_grad]
-        # Create an optimizer that uses SGD (stochastic gradient descent) to train the parameters
-        optimizer = torch.optim.SGD(parameters, lr=learning_rate, momentum=momentum,
-                                    weight_decay=weight_decay)
-        # Create a learning rate scheduler that decreases learning rate by gamma every lr_step_size epochs
-        lr_scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=lr_step_size, gamma=gamma)
+        optimizer, lr_scheduler = self._make_optimizer(learning_rate, momentum, weight_decay, lr_step_size, gamma)
 
         # Train on the entire dataset for the specified number of times (epochs)
         for epoch in range(epochs):
@@ -201,75 +241,22 @@ class WorkerRCNN(qtc.QThread):
             # status emit deep learning process
             self.status.emit(f"Deep Learning in process")
 
+            self._train_one_epoch(dataset, optimizer, verbose)
+
+            avg_loss = self._validate_one_epoch(val_dataset, verbose)
+            if avg_loss is not None and avg_loss != 0:
+                avg_loss /= len(val_dataset.dataset)
+            losses.append(avg_loss)
+
             # if verbose:
-            # print('Epoch {} of {}'.format(epoch + 1, epochs))
+            # print('Loss: {}'.format(avg_loss))
 
-            # Training step
-            self._model.train()
-
-            # if verbose:
-            # print('Begin iterating over training dataset')
-
-            iterable = tqdm(
-                dataset,
-                position=0,
-                leave=True,
-                bar_format="{desc:<4}{bar:30}{percentage:3.0f}% {r_bar}") if verbose else dataset
-
-            for images, targets in iterable:
-                if self.thread_active is False:
-                    break
-                self.convert_to_int_labels(targets)
-                images, targets = self.to_device(images, targets)
-
-                # Calculate the model's loss (i.e. how well it does on the current
-                # image and target, with a lower loss being better)
-                loss_dict = self._model(images, targets)
-                total_loss = sum(loss for loss in loss_dict.values())
-
-                # Zero any old/existing gradients on the model's parameters
-                optimizer.zero_grad()
-                # Compute gradients for each parameter based on the current loss calculation
-                total_loss.backward()
-                # Update model parameters from gradients: param -= learning_rate * param.grad
-                optimizer.step()
-                self.status.emit(f"Iterating over training set: {iterable}")
-
-            # Validation step
-            if val_dataset is not None:
-                avg_loss = 0
-                with torch.no_grad():
-                    # if verbose:
-                    # print('Begin iterating over validation dataset')
-
-                    iterable = tqdm(
-                        val_dataset,
-                        position=0,
-                        leave=True,
-                        bar_format="{desc:<4}{bar:30}{percentage:3.0f}% {r_bar}") if verbose else val_dataset
-                    for images, targets in iterable:
-                        if self.thread_active is False:
-                            break
-                        self.convert_to_int_labels(targets)
-                        images, targets = self.to_device(images, targets)
-                        loss_dict = self._model(images, targets)
-                        total_loss = sum(loss for loss in loss_dict.values())
-                        avg_loss += total_loss.item()
-                        self.status.emit(f"Iterating over validation set: {iterable}")
-
-                if avg_loss != 0:
-                    avg_loss /= len(val_dataset.dataset)
-                losses.append(avg_loss)
-
-                # if verbose:
-                # print('Loss: {}'.format(avg_loss))
-
-                if self.thread_active is True:
-                    self.learn.emit(
-                        f"Epoch: {epoch + 1:003d}/{epochs:003d}\tLoss: {avg_loss:0005.4f}")
-                    # self.learn.emit(f"{dashed}")
-                    data.append((epoch + 1, avg_loss))
-                    self.learn_graph.emit(data)
+            if self.thread_active is True:
+                self.learn.emit(
+                    f"Epoch: {epoch + 1:003d}/{epochs:003d}\tLoss: {avg_loss:0005.4f}")
+                # self.learn.emit(f"{dashed}")
+                data.append((epoch + 1, avg_loss))
+                self.learn_graph.emit(data)
 
             # Update the learning rate every few epochs
             lr_scheduler.step()

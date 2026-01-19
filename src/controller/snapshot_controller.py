@@ -99,30 +99,37 @@ class SnapshotDialog(qtw.QDialog, Ui_dialog_snapshots):
 
     def accept(self):
         self.progressBar.setValue(0)
-        if self.ds_name is not None and self.path is not None:
-            dataset = os.path.join(f"{self.path}/{self.ds_name}")
-            if not os.path.exists(dataset):
-                os.makedirs(dataset)
-                os.makedirs(f"{dataset}/train")
-                os.makedirs(f"{dataset}/valid")
+        ds_name = (self.ds_name or '').strip()
+        base_path = (self.path or '').strip()
+        if not ds_name or not base_path:
+            self.lbl_status.setText("Check dataset name and directory")
+            return
 
-            if not isinstance(self.snapshot_model, SnapshotsModel):
-                self.snapshot_model = SnapshotsModel()
+        dataset = os.path.join(base_path, ds_name)
+        os.makedirs(os.path.join(dataset, 'train'), exist_ok=True)
+        os.makedirs(os.path.join(dataset, 'valid'), exist_ok=True)
 
-            self.snapshot_model.set_number(self.sb_number_of_images.value())
-            self.progressBar.setMaximum(self.sb_number_of_images.value())
-            self.snapshot_model.set_path(dataset)
-            self.snapshot_model.set_scale_camera(.4)
-            self.snapshot_model.set_gain_camera(self.gain)
-            self.__get_exposure_1()
-            self.__get_exposure_2()
-            self.snapshot_model.set_exposure_camera(self.exposure)
-            self.snapshot_model.set_interval_camera(self.interval)
-            self.snapshot_model.check_conn.connect(self.__check_conn_snapshot)
-            self.snapshot_model.update.connect(self.__update_image)
-            self.snapshot_model.status.connect(self.__get_status)
-            self.snapshot_model.progress.connect(self.__progress)
-            self.snapshot_model.start()
+        if not isinstance(self.snapshot_model, SnapshotsModel):
+            self.snapshot_model = SnapshotsModel()
+        elif self.snapshot_model.isRunning():
+            # already capturing
+            self.lbl_status.setText("Capture already running")
+            return
+
+        self.snapshot_model.set_number(self.sb_number_of_images.value())
+        self.progressBar.setMaximum(self.sb_number_of_images.value())
+        self.snapshot_model.set_path(dataset)
+        self.snapshot_model.set_scale_camera(.4)
+        self.snapshot_model.set_gain_camera(self.gain)
+        self.__get_exposure_1()
+        self.__get_exposure_2()
+        self.snapshot_model.set_exposure_camera(self.exposure)
+        self.snapshot_model.set_interval_camera(self.interval)
+        self.snapshot_model.check_conn.connect(self.__check_conn_snapshot)
+        self.snapshot_model.update.connect(self.__update_image)
+        self.snapshot_model.status.connect(self.__get_status)
+        self.snapshot_model.progress.connect(self.__progress)
+        self.snapshot_model.start()
 
     def reject(self):
         if isinstance(self.snapshot_model, SnapshotsModel):
@@ -159,14 +166,11 @@ class SnapshotDialog(qtw.QDialog, Ui_dialog_snapshots):
 
 
     def closeEvent(self, e):
-        if isinstance(self.snapshot_model, SnapshotDialog):
+        if isinstance(self.snapshot_model, SnapshotsModel):
             if self.snapshot_model.isRunning():
                 self.snapshot_model.stop()
-
-                del self.snapshot_model
-                gc.collect()
-                self.snapshot_model = None
+            del self.snapshot_model
+            gc.collect()
+            self.snapshot_model = None
 
         e.accept()
-
-

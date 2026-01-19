@@ -40,7 +40,7 @@ class SnapshotsModel(qtc.QThread):
         self.gain = gain
 
     def get_gain_camera(self):
-        return self.gain()
+        return self.gain
 
     def set_exposure_camera(self, exposure: int):
         self.exposure = exposure
@@ -55,7 +55,7 @@ class SnapshotsModel(qtc.QThread):
         self.interval = interval
 
     def get_interval_camera(self):
-        time.sleep(self.interval)
+        return self.interval
 
     def __config_camera(self):
         if not isinstance(self.mutex, qtc.QMutex):
@@ -78,51 +78,89 @@ class SnapshotsModel(qtc.QThread):
         self.cam.start_acquisition()
 
     def __close_cam(self):
-        self.cam.set_counter_selector("XI_CNT_SEL_TRANSPORT_SKIPPED_FRAMES")
-        self.cam.get_counter_value()
-        self.cam.set_counter_selector("XI_CNT_SEL_API_SKIPPED_FRAMES")
-        self.cam.get_counter_value()
-        self.cam.stop_acquisition()
-        self.cam.close_device()
+        if not isinstance(self.cam, xiapi.Camera):
+            self.check_conn.emit(False)
+            return
+        try:
+            self.cam.set_counter_selector("XI_CNT_SEL_TRANSPORT_SKIPPED_FRAMES")
+            self.cam.get_counter_value()
+            self.cam.set_counter_selector("XI_CNT_SEL_API_SKIPPED_FRAMES")
+            self.cam.get_counter_value()
+        except Exception:
+            # ignore counter errors on shutdown
+            pass
+        try:
+            self.cam.stop_acquisition()
+        except Exception:
+            pass
+        try:
+            self.cam.close_device()
+        except Exception:
+            pass
         self.check_conn.emit(False)
+
+    def _validate_config(self):
+        if not self.path or not isinstance(self.path, str):
+            raise ValueError("SnapshotsModel: path is not set")
+        if not isinstance(self.number, int) or self.number <= 0:
+            raise ValueError("SnapshotsModel: number of images is not set")
+        if self.gain is None:
+            raise ValueError("SnapshotsModel: gain is not set")
+        if self.exposure is None:
+            raise ValueError("SnapshotsModel: exposure is not set")
+
+    def _ensure_output_dirs(self):
+        os.makedirs(os.path.join(self.path, 'train'), exist_ok=True)
+        os.makedirs(os.path.join(self.path, 'valid'), exist_ok=True)
+
+    def _write_image(self, img, index: int):
+        check_count = int(self.number * .8)
+        subdir = 'train' if index < check_count else 'valid'
+        out_path = os.path.join(f"{self.path}/{subdir}/{datetime.datetime.now()}.jpeg")
+        cv2.imwrite(out_path, img)
+
+    def _capture_one(self, index: int):
+        self.check_conn.emit(True)
+        self.cam.set_gain(self.gain)
+        self.cam.set_exposure(self.exposure)
+        if self.interval:
+            time.sleep(self.interval)
+        self.cam.get_image(self.img)
+        img = self.img.get_image_data_numpy(True)
+        img = cv2.resize(img, (800, 600))
+
+        convert = qtg.QImage(
+            img.data,
+            img.shape[1],
+            img.shape[0],
+            qtg.QImage.Format.Format_RGB888
+        )
+
+        pic = convert.scaled(self.size, Const.KEEP_ASPECT_RATION_BY_EXPANDING, Const.FAST_TRANSFORMATION)
+        self.update.emit(pic)
+        self._write_image(img, index)
+        self.status.emit(f"Image: {index}")
+        self.progress.emit(index)
+        if index == self.number:
+            self.status.emit("Done")
 
     def run(self):
         try:
             self.thread = True
+            self._validate_config()
+            self._ensure_output_dirs()
+
             self.__config_camera()
             self.mutex.lock()
-            for i in range(1, self.number+1):
-                if self.thread and self.cam.is_isexist():
-                    self.check_conn.emit(True)
-                    self.cam.set_gain(self.gain)
-                    self.cam.set_exposure(self.exposure)
-                    self.get_interval_camera()
-                    self.cam.get_image(self.img)
-                    img = self.img.get_image_data_numpy(True)
-                    img = cv2.resize(img, (800, 600))
-
-                    convert = qtg.QImage(
-                        img.data,
-                        img.shape[1],
-                        img.shape[0],
-                        qtg.QImage.Format.Format_RGB888
-                    )
-
-                    pic = convert.scaled(self.size, Const.KEEP_ASPECT_RATION_BY_EXPANDING, Const.FAST_TRANSFORMATION)
-                    self.update.emit(pic)
-                    check_count = int(self.number * .8)
-                    if i < check_count:
-                        cv2.imwrite(os.path.join(f"{self.path}/train/{datetime.datetime.now()}.jpeg"), img)
+            try:
+                for i in range(1, self.number + 1):
+                    if self.thread and self.cam.is_isexist():
+                        self._capture_one(i)
                     else:
-                        cv2.imwrite(os.path.join(f"{self.path}/valid/{datetime.datetime.now()}.jpeg"), img)
-                    self.status.emit(f"Image: {i}")
-                    self.progress.emit(i)
-                    if i == self.number:
-                        self.status.emit("Done")
-                else:
-                    self.status.emit(f"Canceled, Last Image {i}")
-                    break
-            self.mutex.unlock()
+                        self.status.emit(f"Canceled, Last Image {i}")
+                        break
+            finally:
+                self.mutex.unlock()
 
             self.__close_cam()
             self.stop()
@@ -130,10 +168,18 @@ class SnapshotsModel(qtc.QThread):
         except xiapi.Xi_error as e:
             self.stop()
             self.exception.emit(str(e))
+        except ValueError as e:
+            # configuration/validation error
+            self.stop()
+            self.exception.emit(str(e))
 
     def stop(self):
-        if self.isRunning():
+        # allow stop() to be called safely multiple times
+        self.thread = False
+        try:
             self.check_conn.emit(False)
-            self.thread = False
+        except Exception:
+            pass
+        if self.isRunning():
             self.quit()
             self.wait()

@@ -3,10 +3,10 @@ import os
 import torch
 import pytest
 
-# Ensure project root is importable
-project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
-if project_root not in sys.path:
-    sys.path.insert(0, project_root)
+# Ensure repository root is importable (so `import src...` works)
+repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
+if repo_root not in sys.path:
+    sys.path.insert(0, repo_root)
 
 # Monkeypatch torchvision's heavy model before importing WorkerRCNN
 import torchvision
@@ -48,7 +48,7 @@ except Exception:
         torchvision.models.detection = types.SimpleNamespace()
     torchvision.models.detection.fasterrcnn_resnet50_fpn = _dummy_fasterrcnn_resnet50_fpn
 
-from model.learning_process import WorkerRCNN
+from src.model.learning_process import WorkerRCNN
 
 
 def test_get_augment_returns_compose():
@@ -81,3 +81,41 @@ def test_convert_to_int_labels_behavior():
     targets2 = [ {'labels': ['Cap NOK'], 'boxes': torch.tensor([[0,0,10,10]])} ]
     with pytest.raises(ValueError):
         w.convert_to_int_labels(targets2)
+
+
+def test_annotation_string_is_parsed_to_list():
+    w = WorkerRCNN(dataset_name='.', batch_size=1, annotation='"Cap OK", "Cap NOK"', epochs=1, lr_step_size=1, learning_rate=0.001, model_name='test')
+    assert w.annotation == ['Cap OK', 'Cap NOK']
+
+
+def test_dataset_getitem_resize_tuple_no_ambiguous_truth(monkeypatch):
+    """Regression test: Resize((h,w)) used to make scale_factor an array and crash."""
+    import pandas as pd
+    from src.model import rcnn_model
+    from torchvision import transforms
+
+    # Fake a minimal csv dataframe with one image_id and one box
+    df = pd.DataFrame([
+        {
+            'filename': 'dummy.jpg',
+            'width': 200,
+            'height': 100,
+            'class': 'Cap OK',
+            'xmin': 10,
+            'ymin': 20,
+            'xmax': 30,
+            'ymax': 40,
+            'image_id': 0,
+        }
+    ])
+
+    monkeypatch.setattr(rcnn_model, 'xml_to_csv', lambda _: df)
+    # read_image should return something PIL/torchvision can resize; use a torch tensor image
+    monkeypatch.setattr(rcnn_model, 'read_image', lambda _: torch.zeros((3, 100, 200), dtype=torch.uint8))
+
+    ds = rcnn_model.Dataset(label_data='not_a_file_but_folder', transform=transforms.Compose([
+        transforms.Resize((128, 128)),
+    ]))
+
+    img, target = ds[0]
+    assert 'boxes' in target and target['boxes'].shape[-1] == 4

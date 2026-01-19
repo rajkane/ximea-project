@@ -30,18 +30,23 @@ class CameraModel(qtc.QThread):
         self.cam = None
         self.img = None
         self.device = None
+        self._detector_ready = False
 
     def set_is_model(self, is_model: bool):
         self.__is_model = is_model
+        # reset detector state when toggling
+        self._detector_ready = False
 
     def set_auto_gain_exposure(self, auto: bool):
         self.__auto = auto
 
     def set_model(self, model: str):
         self.__model = model
+        self._detector_ready = False
 
     def set_annot(self, annot: list):
         self.__annot = annot
+        self._detector_ready = False
 
     def set_gain_camera(self, gain: float):
         self.__gain = gain
@@ -125,21 +130,36 @@ class CameraModel(qtc.QThread):
         )
 
     def __close_cam(self):
-        self.mutex.lock()
-        self.status.emit("Stopping Acquisition ...")
-        self.cam.set_counter_selector("XI_CNT_SEL_TRANSPORT_SKIPPED_FRAMES")
-        self.cam.get_counter_value()
-        self.cam.set_counter_selector("XI_CNT_SEL_API_SKIPPED_FRAMES")
-        self.cam.get_counter_value()
-        self.cam.stop_acquisition()
-        self.status.emit("Stopped Acquisition")
-        self.status.emit("Closing Camera ...")
-        self.cam.close_device()
-        self.status.emit("Camera Closed")
-        self.check_conn.emit(False)
-        self.mutex.unlock()
+        if self.mutex is not None:
+            self.mutex.lock()
+        try:
+            self.status.emit("Stopping Acquisition ...")
+            try:
+                self.cam.set_counter_selector("XI_CNT_SEL_TRANSPORT_SKIPPED_FRAMES")
+                self.cam.get_counter_value()
+                self.cam.set_counter_selector("XI_CNT_SEL_API_SKIPPED_FRAMES")
+                self.cam.get_counter_value()
+            except Exception:
+                pass
+            try:
+                self.cam.stop_acquisition()
+            except Exception:
+                pass
+            self.status.emit("Stopped Acquisition")
+            self.status.emit("Closing Camera ...")
+            try:
+                self.cam.close_device()
+            except Exception:
+                pass
+            self.status.emit("Camera Closed")
+            self.check_conn.emit(False)
+        finally:
+            if self.mutex is not None:
+                self.mutex.unlock()
 
     def detector(self):
+        if self._detector_ready:
+            return
         if self.__is_model and self.__model is not None and self.__annot is not None:
             import torch
             from detecto import core
@@ -148,6 +168,7 @@ class CameraModel(qtc.QThread):
             if self.device == "cuda":
                 torch.cuda.empty_cache()
             self.model = core.Model.load(self.__model, self.__annot)
+            self._detector_ready = True
 
     def detection(self, img):
         if self.__is_model and self.__model is not None and self.__annot is not None:
@@ -164,36 +185,52 @@ class CameraModel(qtc.QThread):
         pic = convert.scaled(self.__size, Const.KEEP_ASPECT_RATION_BY_EXPANDING, Const.FAST_TRANSFORMATION)
         self.update.emit(pic)
 
+    def _sleep_seconds(self) -> float:
+        """Compute safe sleep duration for the streaming loop."""
+        try:
+            if self.__exposure is None or not Const.WAIT_EXPOSURE:
+                return 0.0
+            return float(self.__exposure) / float(Const.WAIT_EXPOSURE)
+        except Exception:
+            return 0.0
+
+    def _process_one_frame(self):
+        """Grab one frame, apply processing, emit UI updates."""
+        self.check_conn.emit(True)
+
+        self.cam.get_image(self.img)
+        self.cam.set_exp_priority(.5)
+        self.eag_auto_maunal()
+
+        """ self.gain.emit(int(self.cam.get_gain()))
+         self.exposure.emit(int(self.cam.get_exposure()))"""
+
+        img = self.img.get_image_data_numpy(True)
+        img = cv2.resize(img, (800, 600))
+
+        self.show_fps(img)
+        self.detection(img=img)
+        self.convert_frame(img=img)
+
+        self.status.emit("Camera Streaming ...")
+
+        sleep_s = self._sleep_seconds()
+        if sleep_s > 0:
+            time.sleep(sleep_s)
+
     def run(self):
         try:
             self.thread = True
             self.__config_camera()
+            # load detection model once if enabled
+            self.detector()
             while self.thread:
                 if self.cam.is_isexist():
                     self.mutex.lock()
-                    self.check_conn.emit(True)
-
-                    self.detector()
-
-                    self.cam.get_image(self.img)
-                    self.cam.set_exp_priority(.5)
-                    self.eag_auto_maunal()
-
-                    """ self.gain.emit(int(self.cam.get_gain()))
-                     self.exposure.emit(int(self.cam.get_exposure()))"""
-
-                    img = self.img.get_image_data_numpy(True)
-                    img = cv2.resize(img, (800, 600))
-
-                    self.show_fps(img)
-
-                    self.detection(img=img)
-
-                    self.convert_frame(img=img)
-
-                    self.status.emit("Camera Streaming ...")
-                    time.sleep(self.__exposure / Const.WAIT_EXPOSURE)
-                    self.mutex.unlock()
+                    try:
+                        self._process_one_frame()
+                    finally:
+                        self.mutex.unlock()
                 else:
                     break
 
@@ -212,8 +249,12 @@ class CameraModel(qtc.QThread):
             self.sfps, self.cam, self.img, self.model = None, None, None, None
 
     def stop(self):
-        if self.isRunning():
+        # allow stop() to be called safely multiple times
+        self.thread = False
+        try:
             self.check_conn.emit(False)
-            self.thread = False
+        except Exception:
+            pass
+        if self.isRunning():
             self.quit()
             self.wait()

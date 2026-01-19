@@ -11,6 +11,9 @@ from src.model.constants import Exposure
 
 
 class MainWindow(qtw.QMainWindow, Ui_MainWindow):
+    def _camera_is_running(self) -> bool:
+        return isinstance(self.cam_process, CameraModel) and self.cam_process.isRunning()
+
     def __init__(self):
         super(MainWindow, self).__init__()
         self.setupUi(self)
@@ -27,13 +30,12 @@ class MainWindow(qtw.QMainWindow, Ui_MainWindow):
         self.statusBar().showMessage("Ready")
 
     def __config_camera_window(self):
-        if isinstance(self.cam_process, CameraModel):
-            if self.cam_process.isRunning():
-                if  qtc.Qt.WindowState.WindowMaximized == self.windowState():
-                    self.scale = 1.5
-                else:
-                    self.scale = 1
-                self.cam_process.set_scale_camera(self.scale)
+        if self._camera_is_running():
+            if qtc.Qt.WindowState.WindowMaximized == self.windowState():
+                self.scale = 1.5
+            else:
+                self.scale = 1
+            self.cam_process.set_scale_camera(self.scale)
 
     def __config_buttons(self):
         self.btn_start.setEnabled(True)
@@ -59,32 +61,18 @@ class MainWindow(qtw.QMainWindow, Ui_MainWindow):
         self.dial_exposure.valueChanged.connect(self.__change_exposure_camera)
 
     def __auto_gain_exposure(self):
-        if self.chb_manual.isChecked():
-            self.dial_gain.setEnabled(True)
-            self.dial_exposure.setEnabled(True)
-            if isinstance(self.cam_process, CameraModel):
-                if self.cam_process.isRunning():
-                    self.cam_process.set_auto_gain_exposure(True)
-        else:
-            self.dial_gain.setEnabled(False)
-            self.dial_exposure.setEnabled(False)
-            if isinstance(self.cam_process, CameraModel):
-                if self.cam_process.isRunning():
-                    self.cam_process.set_auto_gain_exposure(False)
+        manual = self.chb_manual.isChecked()
+        self.dial_gain.setEnabled(manual)
+        self.dial_exposure.setEnabled(manual)
+        if self._camera_is_running():
+            self.cam_process.set_auto_gain_exposure(manual)
 
     def __enable_model(self):
-        if self.chb_model.isChecked():
-            self.tbtn_model.setEnabled(True)
-            self.tbtn_annotation.setEnabled(True)
-            if isinstance(self.cam_process, CameraModel):
-                if self.cam_process.isRunning():
-                    self.cam_process.set_is_model(True)
-        else:
-            self.tbtn_model.setEnabled(False)
-            self.tbtn_annotation.setEnabled(False)
-            if isinstance(self.cam_process, CameraModel):
-                if self.cam_process.isRunning():
-                    self.cam_process.set_is_model(False)
+        enabled = self.chb_model.isChecked()
+        self.tbtn_model.setEnabled(enabled)
+        self.tbtn_annotation.setEnabled(enabled)
+        if self._camera_is_running():
+            self.cam_process.set_is_model(enabled)
 
     def __open_model(self):
         path_model, _ = qtw.QFileDialog.getOpenFileName(
@@ -132,12 +120,11 @@ class MainWindow(qtw.QMainWindow, Ui_MainWindow):
             self.__change_exposure_camera(self.dial_exposure.value())
 
     def __stop_camera(self):
-        if isinstance(self.cam_process, CameraModel):
-            if self.cam_process.isRunning():
-                self.cam_process.stop()
-                del self.cam_process
-                gc.collect()
-                self.cam_process = None
+        if self._camera_is_running():
+            self.cam_process.stop()
+            del self.cam_process
+            gc.collect()
+            self.cam_process = None
         self.chb_manual.setChecked(False)
         self.dial_gain.setEnabled(False)
         self.dial_exposure.setEnabled(False)
@@ -157,7 +144,8 @@ class MainWindow(qtw.QMainWindow, Ui_MainWindow):
 
     def __change_gain_camera(self, gain: int):
         self.lbl_gain_value.setText(f"{gain}dB")
-        self.cam_process.set_gain_camera(float(gain))
+        if self._camera_is_running():
+            self.cam_process.set_gain_camera(float(gain))
 
     def __change_exposure_camera(self, exposure: int):
         value = Exposure.data.get(exposure)
@@ -167,7 +155,8 @@ class MainWindow(qtw.QMainWindow, Ui_MainWindow):
             self.lbl_exposure_value.setText(f"{ratio}s")
         else:
             self.lbl_exposure_value.setText(f"{value}s")
-        self.cam_process.set_exposure_camera(int(value * Const.WAIT_EXPOSURE))
+        if self._camera_is_running():
+            self.cam_process.set_exposure_camera(int(value * Const.WAIT_EXPOSURE))
 
     @qtc.pyqtSlot(bool)
     def __check_conn_camera(self, check):
