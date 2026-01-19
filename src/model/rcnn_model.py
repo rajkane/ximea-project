@@ -193,8 +193,16 @@ class Dataset(torch.utils.data.Dataset):
                 # If a resize transformation exists, scale down the coordinates
                 # of the box by the same amount as the resize
                 if isinstance(t, transforms.Resize):
-                    original_size = min(height, width)
-                    scale_factor = original_size / t.size
+                    # t.size can be an int or a (h, w) tuple; ensure scalar scale factor
+                    original_size = float(min(height, width))
+                    if isinstance(t.size, (tuple, list)):
+                        target_size = float(min(t.size))
+                    else:
+                        target_size = float(t.size)
+                    if target_size != 0:
+                        scale_factor = original_size / target_size
+                    else:
+                        scale_factor = 1.0
 
                 # If a horizontal flip transformation exists, get its probability
                 # so we can apply it manually to both the image and the boxes.
@@ -218,7 +226,7 @@ class Dataset(torch.utils.data.Dataset):
                     image = t(image)
 
             # Scale down box if necessary
-            if scale_factor != 1.0:
+            if float(scale_factor) != 1.0:
                 for idx, box in enumerate(targets['boxes']):
                     box = (box / scale_factor).long()
                     targets['boxes'][idx] = box
