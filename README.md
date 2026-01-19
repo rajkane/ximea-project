@@ -90,6 +90,64 @@ When training finishes, the app saves:
 - `Models/<model_name>.pth` — model weights
 - `Models/<model_name>.pth.txt` — a single line containing classes, e.g. `Cap OK, Cap NOK`
 
+## Inference backend (CUDA / CPU / ONNX)
+
+The app can run inference on:
+
+- **PyTorch + CUDA** (fastest, if you have an NVIDIA GPU and CUDA working)
+- **PyTorch CPU** (works everywhere, slower)
+- **ONNX CPU** (optional, *only if you later add ONNX export + onnxruntime inference*)
+
+### Automatic selection (recommended)
+
+Default is **AUTO**:
+
+1. Use **CUDA** if available
+2. Else use **ONNX CPU** if `onnxruntime` is installed
+3. Else use **PyTorch CPU**
+
+The resolved backend is stored in env var `INFERENCE_BACKEND_RESOLVED`.
+
+### Manual selection (all options)
+
+You can force a backend in two ways.
+
+**1) Environment variable** (works for GUI launchers too):
+
+- `INFERENCE_BACKEND=auto`
+- `INFERENCE_BACKEND=torch-cuda`
+- `INFERENCE_BACKEND=torch-cpu`
+- `INFERENCE_BACKEND=onnx-cpu`
+
+**2) CLI argument**:
+
+- `python src/main.py --backend auto`
+- `python src/main.py --backend torch-cuda`
+- `python src/main.py --backend torch-cpu`
+- `python src/main.py --backend onnx-cpu`
+
+Notes:
+- If you force `torch-cpu`, the app also sets `CUDA_VISIBLE_DEVICES=''` to prevent accidental CUDA usage.
+- If you request a backend that is not available, the app falls back to **AUTO**.
+- Selecting `onnx-cpu` currently only selects the backend (for future wiring). Actual ONNX inference will work only after ONNX export + runtime support is implemented.
+
+### Is the ONNX model quantized?
+
+No — exporting to **ONNX** does **not** automatically quantize the model.
+
+You can inspect an ONNX file and see whether it contains INT8/UINT8 weight tensors using:
+
+```bash
+python -m src.model.inspect_onnx_model Models/cap_model.onnx
+```
+
+Output example:
+
+- `is_quantized: False` + `initializer_dtypes: FLOAT=...` → the model is **not int8-quantized** (typically float32)
+- `is_quantized: True` + `initializer_dtypes: INT8=...` or `UINT8=...` → the model is likely **int8-quantized**
+
+If you want true INT8 quantization for ONNX, we would need to add an explicit quantization step (and possibly additional tooling). Ask before we add any extra packages for that.
+
 ## Troubleshooting
 
 - **Training stops with unknown label error**: your XML files contain a label that is not listed in the GUI annotation field. Add the missing label(s) in the GUI or fix the XML annotations.

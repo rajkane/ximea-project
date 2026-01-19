@@ -161,10 +161,34 @@ class CameraModel(qtc.QThread):
         if self._detector_ready:
             return
         if self.__is_model and self.__model is not None and self.__annot is not None:
+            import os
             import torch
             from detecto import core
-            # Ensure GPU is available
-            self.device = "cuda" if torch.cuda.is_available() else "cpu"
+
+            resolved = os.getenv("INFERENCE_BACKEND_RESOLVED", "").strip().lower()
+
+            # If user selected ONNX, try it first (CPU only). If anything fails, fall back to Detecto.
+            if resolved == "onnx-cpu":
+                try:
+                    # If user selected a .pth model, we look for a sibling .onnx file.
+                    onnx_path = os.path.splitext(self.__model)[0] + ".onnx"
+                    threads = int(os.getenv("ONNX_NUM_THREADS", "4"))
+                    from src.model.onnx_inference import OnnxDetector
+
+                    self.device = "cpu"
+                    self.model = OnnxDetector(onnx_path, self.__annot, threads=threads)
+                    self._detector_ready = True
+                    return
+                except Exception:
+                    # Fall back to Detecto below
+                    pass
+
+            # Torch backend selection
+            if resolved == "torch-cpu":
+                self.device = "cpu"
+            else:
+                self.device = "cuda" if torch.cuda.is_available() else "cpu"
+
             if self.device == "cuda":
                 torch.cuda.empty_cache()
             self.model = core.Model.load(self.__model, self.__annot)
