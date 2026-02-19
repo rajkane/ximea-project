@@ -51,6 +51,16 @@ class CameraModel(qtc.QThread):
         self._camera_backend: str | None = None  # 'ximea' or 'opencv'
         self._cv_cap = None
 
+        # Performance tuning (env-controlled; safe defaults)
+        # - INFERENCE_EVERY_N=1 means run inference on every frame
+        # - INFERENCE_RESIZE=0 disables inference resize (uses current frame size)
+        self._inference_every_n: int = self._parse_int_env('INFERENCE_EVERY_N', 1)
+        self._inference_every_n = max(self._inference_every_n, 1)
+        self._inference_resize: int = self._parse_int_env('INFERENCE_RESIZE', 0)
+        self._inference_resize = max(self._inference_resize, 0)
+
+        self._frame_idx: int = 0
+
     # -----------------
     # Public setters (used by GUI + tests)
     # -----------------
@@ -102,25 +112,64 @@ class CameraModel(qtc.QThread):
     # -----------------
     # Detector
     # -----------------
-    def _try_load_onnx_detector(self, resolved: str) -> bool:
-        if resolved != 'onnx-cpu':
-            return False
-        try:
-            import os
-            base = os.path.splitext(self.__model)[0]
-            onnx_int8 = base + '.int8.onnx'
-            onnx_fp32 = base + '.onnx'
-            onnx_path = onnx_int8 if os.path.isfile(onnx_int8) else onnx_fp32
+    @staticmethod
+    def _is_weights_only_error(exc: Exception) -> bool:
+        msg = str(exc)
+        return ('weights_only' in msg) or ('Weights only load failed' in msg)
 
-            threads = int(os.getenv('ONNX_NUM_THREADS', '4'))
+    def _onnx_candidates(self) -> list[str]:
+        import os
+
+        base = os.path.splitext(self.__model)[0]
+        onnx_int8 = base + '.int8.onnx'
+        onnx_fp32 = base + '.onnx'
+
+        out: list[str] = []
+        if os.path.isfile(onnx_int8):
+            out.append(onnx_int8)
+        if os.path.isfile(onnx_fp32):
+            out.append(onnx_fp32)
+        return out
+
+    def _try_load_onnx_path(self, onnx_path: str, threads: int) -> bool:
+        try:
             from src.model.onnx_inference import OnnxDetector
 
             self.device = 'cpu'
             self.model = OnnxDetector(onnx_path, self.__annot, threads=threads)
             self._detector_ready = True
+            try:
+                self.status.emit(f"ONNX loaded: {onnx_path}")
+            except Exception:
+                pass
             return True
-        except Exception:
+        except Exception as e:
+            try:
+                self.exception.emit(f"ONNX load failed for {onnx_path}: {e}")
+            except Exception:
+                pass
             return False
+
+    def _try_load_onnx_detector(self, resolved: str) -> bool:
+        if resolved != 'onnx-cpu':
+            return False
+
+        candidates = self._onnx_candidates()
+        if not candidates:
+            import os
+            base = os.path.splitext(self.__model)[0]
+            try:
+                self.exception.emit(f"ONNX file not found. Expected {base}.int8.onnx or {base}.onnx")
+            except Exception:
+                pass
+            return False
+
+        import os
+        threads = int(os.getenv('ONNX_NUM_THREADS', '4'))
+        for onnx_path in candidates:
+            if self._try_load_onnx_path(onnx_path, threads):
+                return True
+        return False
 
     def _load_torch_detector(self, resolved: str):
         import torch
@@ -134,7 +183,24 @@ class CameraModel(qtc.QThread):
         if self.device == 'cuda':
             torch.cuda.empty_cache()
 
-        self.model = core.Model.load(self.__model, self.__annot)
+        try:
+            self.model = core.Model.load(self.__model, self.__annot)
+            self._detector_ready = True
+            return
+        except Exception as e:
+            if not self._is_weights_only_error(e):
+                raise
+            try:
+                self.status.emit(f"Deteco Model.load failed ({e}); retrying torch.load(weights_only=False) ...")
+            except Exception:
+                pass
+
+        m = core.Model(self.__annot)
+        state = torch.load(self.__model, map_location=m._device, weights_only=False)
+        if not isinstance(state, dict):
+            raise RuntimeError(f"Expected state_dict dict in {self.__model}, got {type(state)}")
+        m._model.load_state_dict(state)
+        self.model = m
         self._detector_ready = True
 
     def detector(self):
@@ -146,6 +212,22 @@ class CameraModel(qtc.QThread):
 
         import os
         resolved = os.getenv('INFERENCE_BACKEND_RESOLVED', '').strip().lower()
+
+        # Treat AUTO as a hint: if ONNX files exist, prefer ONNX on CPU-only setups.
+        if resolved in {'', 'auto'}:
+            if self._onnx_candidates():
+                resolved = 'onnx-cpu'
+            else:
+                resolved = 'torch-cpu'
+
+        # If user requested ONNX, do not silently fall back to torch.
+        if resolved == 'onnx-cpu':
+            if self._try_load_onnx_detector('onnx-cpu'):
+                return
+            raise RuntimeError(
+                'ONNX backend selected (or preferred by AUTO), but ONNX model could not be loaded. '
+                'Check .onnx/.int8.onnx and onnxruntime installation.'
+            )
 
         if self._try_load_onnx_detector(resolved):
             return
@@ -241,8 +323,9 @@ class CameraModel(qtc.QThread):
         return cap
 
     def _setup_opencv_fallback(self):
+        # Default max index increased: some systems expose webcams at higher indices
         preferred = self._parse_int_env('OPENCV_CAMERA_INDEX', 0)
-        max_index = self._parse_int_env('OPENCV_CAMERA_MAX_INDEX', 3)
+        max_index = self._parse_int_env('OPENCV_CAMERA_MAX_INDEX', 10)
         max_index = max(max_index, preferred)
 
         tried: list[int] = []
@@ -255,10 +338,17 @@ class CameraModel(qtc.QThread):
             if cap is not None:
                 self._cv_cap = cap
                 self._camera_backend = 'opencv'
+                self.status.emit(f"OpenCV camera opened at index {idx}")
                 return
 
-        self.status.emit(f"Failed to open any OpenCV camera. Tried indices: {tried}")
-        raise RuntimeError(f"Failed to open any OpenCV camera. Tried indices: {tried}")
+        hint = (
+            "Failed to open any OpenCV camera. "
+            f"Tried indices: {tried}. "
+            "Hint: set OPENCV_CAMERA_INDEX and OPENCV_CAMERA_MAX_INDEX env vars. "
+            "Example: OPENCV_CAMERA_INDEX=0 OPENCV_CAMERA_MAX_INDEX=10"
+        )
+        self.status.emit(hint)
+        raise RuntimeError(hint)
 
     def __config_camera(self):
         """Configure camera (Ximea -> OpenCV fallback)."""
@@ -311,16 +401,68 @@ class CameraModel(qtc.QThread):
             return False
         return True
 
+    def _maybe_downscale_for_inference(self, img):
+        """Optionally resize image for inference and return (img_for_infer, scale_x, scale_y)."""
+        if self._inference_resize <= 0:
+            return img, 1.0, 1.0
+
+        h, w = img.shape[0], img.shape[1]
+        target = int(self._inference_resize)
+        # Keep aspect ratio: scale so max(H,W) == target
+        max_dim = max(h, w)
+        if max_dim <= target:
+            return img, 1.0, 1.0
+
+        scale = target / float(max_dim)
+        new_w = max(1, int(w * scale))
+        new_h = max(1, int(h * scale))
+        resized = cv2.resize(img, (new_w, new_h))
+        return resized, (w / float(new_w)), (h / float(new_h))
+
+    def _draw_detections_scaled(self, img, labels, boxes, scores, sx: float, sy: float):
+        """Draw boxes on original img where boxes were predicted on a resized image."""
+        if boxes is None or scores is None or not labels:
+            return
+        try:
+            import numpy as np
+            if isinstance(boxes, np.ndarray):
+                boxes_scaled = boxes.copy()
+                boxes_scaled[:, 0] *= sx
+                boxes_scaled[:, 2] *= sx
+                boxes_scaled[:, 1] *= sy
+                boxes_scaled[:, 3] *= sy
+                boxes = boxes_scaled
+        except Exception:
+            pass
+
+        # mimic detector_objects but using provided arrays
+        for i in range(getattr(boxes, 'shape', [0])[0]):
+            box = boxes[i]
+            if scores[i] > .80:
+                cv2.rectangle(img, (int(box[0]), int(box[1])), (int(box[2]), int(box[3])), (0, 255, 150), 2)
+                cv2.rectangle(img, (int(box[0]), int(box[1])), (int(box[0]) + 200, int(box[1]) + 35), (0, 0, 0), -1)
+                cv2.putText(img, f"{labels[i]}: {int(scores[i] * 100)}%", (int(box[0]) + 15, int(box[1] + 25)), cv2.FONT_HERSHEY_PLAIN, 1.5, (0, 255, 150), 1)
+
     def detection(self, img):
         if not (self.__is_model and self.__model is not None and self.__annot is not None):
             return
 
+        self._frame_idx += 1
+        if (self._frame_idx % self._inference_every_n) != 0:
+            return
+
+        img_inf, sx, sy = self._maybe_downscale_for_inference(img)
+
         try:
-            labels, boxes, scores = self.model.predict(img)
+            labels, boxes, scores = self.model.predict(img_inf)
         except Exception:
             return
 
         if not self._has_drawable_detections(labels, boxes, scores):
+            return
+
+        if sx != 1.0 or sy != 1.0:
+            self._draw_detections_scaled(img, labels, boxes, scores, sx, sy)
             return
 
         self.detector_objects(model=self.model, frame=img)
@@ -464,4 +606,9 @@ class CameraModel(qtc.QThread):
 
         if self.isRunning():
             self.quit()
-            self.wait()
+            # Avoid waiting on itself when called from within the worker thread
+            try:
+                if qtc.QThread.currentThread() is not self:
+                    self.wait()
+            except Exception:
+                pass

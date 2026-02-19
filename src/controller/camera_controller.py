@@ -29,6 +29,36 @@ class MainWindow(qtw.QMainWindow, Ui_MainWindow):
         self.__config_other_objects()
         self.__init_backend_selector()
         self.statusBar().showMessage("Ready")
+        self._last_status_detail: str | None = None
+        self._last_error_detail: str | None = None
+        # enable statusbar double-click to show details
+        try:
+            self.statusbar.messageChanged.connect(self._status_message_changed)
+        except Exception:
+            pass
+
+    def _status_message_changed(self, _msg: str):
+        # placeholder hook so statusbar exists; kept for future
+        return
+
+    def _set_status_with_details(self, message: str, *, is_error: bool):
+        max_len = 120
+        message = str(message)
+        preview = message if len(message) <= max_len else (message[:max_len - 1] + '…')
+
+        if is_error:
+            self._last_error_detail = message
+        else:
+            self._last_status_detail = message
+
+        # Always print full details to console for copy/paste.
+        try:
+            import sys
+            print(message, file=sys.stderr if is_error else sys.stdout)
+        except Exception:
+            pass
+
+        self.statusBar().showMessage(preview)
 
     def __init_backend_selector(self):
         """Populate the backend selector.
@@ -233,7 +263,7 @@ class MainWindow(qtw.QMainWindow, Ui_MainWindow):
                 color: white;
             """
         )
-        self.statusBar().showMessage(status)
+        self._set_status_with_details(status, is_error=False)
 
     @qtc.pyqtSlot(str)
     def __get_exception(self, status):
@@ -243,7 +273,7 @@ class MainWindow(qtw.QMainWindow, Ui_MainWindow):
                 color: white;
             """
         )
-        self.statusBar().showMessage(status)
+        self._set_status_with_details(status, is_error=True)
 
     def wheelEvent(self, e):
         if isinstance(self.cam_process, CameraModel):
@@ -257,6 +287,12 @@ class MainWindow(qtw.QMainWindow, Ui_MainWindow):
                     self.cam_process.set_scale_camera(self.scale)
 
     def mouseDoubleClickEvent(self, e):
+        # If user double-clicks and we have details, show them.
+        detail = self._last_error_detail or self._last_status_detail
+        if detail:
+            qtw.QMessageBox.information(self, 'Details', detail)
+            return
+        # ...existing behavior...
         self.showNormal()
         self.__config_camera_window()
 
